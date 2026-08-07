@@ -529,7 +529,7 @@ export class MeshClient extends EventEmitter {
       to: target.to,
       room: target.room,
       replyTo: msgId,
-      body: `rappel: réponse attendue pour ${msgId}`,
+      body: `reminder: reply expected for ${msgId}`,
     });
     this.writeOrQueue(frame);
     this.ring(frame);

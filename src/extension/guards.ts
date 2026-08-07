@@ -3,7 +3,7 @@
 // 2. duplicate (to, room, sha256(body)) within 10 s window → blocked
 // 3. client-side rate caps (mirror of broker caps): 30 msg/min, 5 urgent/min, 1 force/min
 // 4. loopGuard: body containing the literal `mesh_send(` → WARNING ONLY (never blocks —
-//    keyword blocking over-fires; cf. ZOB-COMS-GUARDS in zob tools-coms.ts)
+//    keyword blocking over-fires; warn instead of hard-block)
 // 5. observer role → observer_readonly (broker enforces too; fail early)
 import { normalizeAlias, type MeshPriority, type MeshRole } from "../protocol/envelope.js";
 import { sha256 } from "../protocol/frames.js";

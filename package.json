@@ -1,15 +1,52 @@
 {
   "name": "pi-mesh",
   "version": "0.1.0",
-  "description": "pi-mesh — Pi extension for live agent-to-agent communication: local broker, mesh.v1 protocol, honest delivered/read/answered statuses, hash-only ledger.",
+  "description": "Live agent-to-agent communication for Pi — local broker, mesh.v1 protocol, honest delivered/read/answered statuses, hash-only ledger. Zero runtime dependencies.",
   "type": "module",
+  "license": "MIT",
+  "author": "Clément Garrot <clement.garrot.dev@gmail.com> (https://github.com/cgarrot)",
+  "keywords": [
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "mesh",
+    "multi-agent",
+    "agents",
+    "communication",
+    "broker",
+    "unix-socket",
+    "extension"
+  ],
   "engines": {
     "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cgarrot/pi-mesh.git"
+  },
+  "homepage": "https://github.com/cgarrot/pi-mesh#readme",
+  "bugs": {
+    "url": "https://github.com/cgarrot/pi-mesh/issues"
+  },
+  "pi": {
+    "extensions": ["./extensions"]
+  },
+  "files": [
+    "src",
+    "extensions",
+    "dist",
+    "!dist/test",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "npm run build && node --test dist/test/*.test.js",
-    "smoke": "node scripts/mesh-smoke.mjs"
+    "smoke": "node scripts/mesh-smoke.mjs",
+    "prepublishOnly": "npm test"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

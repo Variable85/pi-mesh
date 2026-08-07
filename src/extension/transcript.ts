@@ -18,7 +18,7 @@ export interface SecretPattern {
   replacement: string;
 }
 
-/** Redaction profile (§9.6 — repris de zob transcript-capture.ts). */
+/** Redaction profile (§9.6 — adapted from the harness transcript-capture module). */
 export const SECRET_PATTERNS: SecretPattern[] = [
   {
     name: "private_key",

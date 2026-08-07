@@ -1,4 +1,4 @@
-# pi-mesh — communication live entre agents Pi
+# pi-mesh — live agent-to-agent communication for Pi
 
 **pi-mesh** is a standalone **Pi extension** for live agent-to-agent
 communication. Local Pi agents talk to each other in < 50 ms through a tiny
@@ -13,8 +13,8 @@ project and use on any machine.
 
 ```
                 ┌────────────────────────────────────────────┐
-                │  broker (détaché)  $TMPDIR/mesh-<uid>/     │
-                │  peers / rooms / mailbox / rates (mémoire) │
+                │  broker (detached) $TMPDIR/mesh-<uid>/     │
+                │  peers / rooms / mailbox / rates (memory) │
                 └───────▲───────────────▲─────────────▲──────┘
                         │ connexions persistantes NDJSON │
         ┌───────────────┴───┐   ┌───────┴────────┐   ┌┴───────────────┐
@@ -29,6 +29,16 @@ project and use on any machine.
 ```
 
 ## Install / use on another machine
+
+**As a Pi package** (recommended — the extension auto-loads):
+
+```bash
+pi install npm:pi-mesh
+# or from git, pinned to a release tag
+pi install git:github.com/cgarrot/pi-mesh@v0.1.0
+```
+
+**From source (clone and run):**
 
 ```bash
 git clone git@github.com:cgarrot/pi-mesh.git
@@ -65,10 +75,19 @@ The broker **auto-spawns** on first use (lockfile in `$TMPDIR/mesh-<uid>/`). No
 daemon management needed. Try `npm run smoke` for a full headless demo
 (2 clients, mailbox, broker-kill recovery).
 
-> Drop the extension into another Pi project: copy `.pi/extensions/mesh/` and
-> the `src/` tree into that project, `npm install` the dev deps, and the
-> `mesh_*` tools + `/mesh` command are available. The extension is a thin
-> adapter over the client — everything else is self-contained Node.
+> Drop the extension into another Pi project: copy `extensions/mesh/` and the
+> `src/` tree into that project, or `pi install` this package — the `mesh_*`
+> tools + `/mesh` command are available. The extension is a thin adapter over
+> the client — everything else is self-contained Node.
+
+## Releases & publishing
+
+- Versioning follows semver from `package.json` (`v0.1.0` = tag + npm version).
+- To publish a new release: `npm version patch|minor|major && git push --tags
+  && npm publish`. `prepublishOnly` runs the full build + test suite first.
+- The package is published as `pi-mesh` on npmjs.org (`publishConfig.access`
+  is public) and is a Pi package (`pi` manifest + `pi-package` keyword), so
+  `pi install npm:pi-mesh` works on any machine.
 
 ## Tools (Pi extension)
 
