@@ -85,9 +85,11 @@ daemon management needed. Try `npm run smoke` for a full headless demo
 - Versioning follows semver from `package.json` (`v0.1.0` = tag + npm version).
 - To publish a new release: `npm version patch|minor|major && git push --tags
   && npm publish`. `prepublishOnly` runs the full build + test suite first.
-- The package is published as `pi-mesh` on npmjs.org (`publishConfig.access`
-  is public) and is a Pi package (`pi` manifest + `pi-package` keyword), so
-  `pi install npm:pi-mesh` works on any machine.
+- The package is published as `pi-mesh-extension` on npmjs.org
+  (`publishConfig.access` is public; the plain `pi-mesh` name is already taken
+  on npm by another project) and is a Pi package (`pi` manifest +
+  `pi-package` keyword), so `pi install npm:pi-mesh-extension` works on any
+  machine.
 
 ## Tools (Pi extension)
 
