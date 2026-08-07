@@ -1,0 +1,59 @@
+// broker/state.ts — in-memory tables only (D14 stateless, I2 presence = connections).
+import type { Socket } from "node:net";
+import type { MeshFrame, MeshRole } from "../protocol/envelope.js";
+
+export interface PeerRecord {
+  alias: string;
+  socket: Socket;
+  rooms: Map<string, MeshRole>;
+  pid?: number;
+  clientVersion?: string;
+  connectedAt: number; // ms
+  lastSeenAt: number; // ms — updated on every received frame
+  helloDone: boolean;
+}
+
+export interface StoredMsg {
+  frame: MeshFrame;
+  enqueuedAt: number; // ms
+}
+
+export interface TokenBucket {
+  tokens: number;
+  lastRefillAt: number; // ms
+}
+
+export interface PeerRates {
+  msg: TokenBucket;
+  urgent: TokenBucket;
+  force: TokenBucket;
+}
+
+export interface BrokerStats {
+  startedAt: number; // ms
+  relayed: number;
+  refused: number;
+  mailboxDelivered: number;
+  mailboxDropped: number;
+}
+
+/** Broker state: 100% memory, rebuilt by re-hello after restart (D14). */
+export class BrokerState {
+  readonly peers = new Map<string, PeerRecord>();
+  readonly rooms = new Map<string, Set<string>>();
+  readonly mailbox = new Map<string, StoredMsg[]>();
+  readonly rates = new Map<string, PeerRates>();
+  /** Aliases seen at least once since broker start (mailbox eligibility, §7.7). */
+  readonly knownAliases = new Set<string>();
+  readonly stats: BrokerStats = {
+    startedAt: Date.now(),
+    relayed: 0,
+    refused: 0,
+    mailboxDelivered: 0,
+    mailboxDropped: 0,
+  };
+}
+
+export function newBucket(tokens: number): TokenBucket {
+  return { tokens, lastRefillAt: Date.now() };
+}

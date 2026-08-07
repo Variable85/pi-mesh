@@ -1,0 +1,343 @@
+// protocol/envelope.ts — MeshFrame type, closed sets, build/validate/parse (§6.2/§6.3/§6.7).
+// No Pi imports (I9). Validation rules applied by BOTH broker and client.
+import {
+  ALIAS_REGEX,
+  MAX_BODY_BYTES,
+  MAX_FRAME_ID_CHARS,
+  MAX_REFS,
+  MAX_REF_CHARS,
+  ROOM_REGEX,
+  SHA256_HEX_REGEX,
+} from "../shared/config.js";
+import { makeMsgId, nowIso, sha256 } from "./frames.js";
+
+export type MeshPriority = "normal" | "urgent" | "force";
+export type MeshRole = "member" | "observer";
+
+export interface MeshPeerInfo {
+  alias: string;
+  rooms: string[];
+  role?: MeshRole;
+  since?: string;
+}
+
+export interface MeshFrame {
+  v: 1;
+  type: string;
+  id: string;
+  from?: string;
+  to?: string;
+  room?: string;
+  replyTo?: string;
+  priority?: MeshPriority;
+  body?: string; // TRANSIENT — never persisted (I1)
+  bodyHash?: string;
+  refs?: string[];
+  reasonHash?: string; // force only
+  expiresAt?: string;
+  code?: string;
+  status?: string;
+  peers?: MeshPeerInfo[];
+  rooms?: string[];
+  role?: MeshRole;
+  mailboxCount?: number;
+  queuedAt?: string; // mailbox frames (§7.7)
+  interruptStatus?: string; // ack for force (§6.6)
+  ts: string;
+}
+
+// ---- Closed sets ----
+export const FRAME_TYPES = [
+  "hello",
+  "welcome",
+  "msg",
+  "ack",
+  "reply",
+  "remind",
+  "presence",
+  "mailbox",
+  "status_req",
+  "status_res",
+  "join",
+  "leave",
+  "ping",
+  "pong",
+  "error",
+] as const;
+export type MeshFrameType = (typeof FRAME_TYPES)[number];
+
+export const ERROR_CODES = [
+  "invalid_frame",
+  "oversized",
+  "hello_required",
+  "invalid_alias",
+  "alias_taken",
+  "invalid_room",
+  "not_member",
+  "observer_readonly",
+  "last_room",
+  "peer_not_found",
+  "rate_limited",
+  "policy_denied",
+  "force_requires_reason",
+  "hash_mismatch",
+  "reply_without_target",
+  "timeout",
+  "expired",
+  "shutting_down",
+  "internal",
+] as const;
+export type MeshErrorCode = (typeof ERROR_CODES)[number];
+
+export const PRIORITIES = ["normal", "urgent", "force"] as const;
+export const ROLES = ["member", "observer"] as const;
+export const ACK_STATUSES = ["delivered", "queued_offline", "dropped_offline", "ok"] as const;
+
+// ---- Ledger safety (I1, §6.2 rule 8, §9.5) ----
+export const FORBIDDEN_PERSISTED_KEYS = [
+  "body",
+  "task",
+  "prompt",
+  "output",
+  "content",
+  "message",
+  "rationale",
+  "text",
+  "diff",
+  "patch",
+] as const;
+
+/** Recursive scan: true if any object key is forbidden (fail-closed before ledger append). */
+export function hasForbiddenPersistedKey(value: unknown): boolean {
+  if (value === null || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some(hasForbiddenPersistedKey);
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if ((FORBIDDEN_PERSISTED_KEYS as readonly string[]).includes(k)) return true;
+    if (hasForbiddenPersistedKey(v)) return true;
+  }
+  return false;
+}
+
+// ---- Alias / room / refs ----
+/** trim + strip leading '@' + lowercase (§6.4). No -/_ equivalence (D4). */
+export function normalizeAlias(raw: string): string {
+  let s = raw.trim();
+  while (s.startsWith("@")) s = s.slice(1);
+  return s.toLowerCase();
+}
+
+export function isValidAlias(alias: string): boolean {
+  return ALIAS_REGEX.test(alias);
+}
+
+export function isValidRoom(room: string): boolean {
+  return ROOM_REGEX.test(room);
+}
+
+/** Repo-relative refs only: reject "..", leading "/", "\", ".env" (§6.2 rule 7). */
+export function isValidRefPath(ref: string): boolean {
+  if (ref.length === 0 || ref.length > MAX_REF_CHARS) return false;
+  if (ref.startsWith("/") || ref.startsWith("~")) return false;
+  if (ref.includes("\\")) return false;
+  if (ref.split("/").some((seg) => seg === "..")) return false;
+  if (ref === ".env" || ref.startsWith(".env.") || ref.endsWith("/.env")) return false;
+  if (ref.includes(".env/") || ref.includes("/.env/")) return false;
+  return true;
+}
+
+// ---- Build ----
+export interface BuildFrameOpts {
+  type: MeshFrameType;
+  id?: string;
+  from?: string;
+  to?: string;
+  room?: string;
+  replyTo?: string;
+  priority?: MeshPriority;
+  body?: string;
+  refs?: string[];
+  reasonHash?: string;
+  expiresAt?: string;
+  code?: MeshErrorCode;
+  status?: string;
+  peers?: MeshPeerInfo[];
+  rooms?: string[];
+  role?: MeshRole;
+  mailboxCount?: number;
+  queuedAt?: string;
+  interruptStatus?: string;
+}
+
+/** Build a protocol-valid frame; bodyHash auto-computed when body present. */
+export function buildFrame(opts: BuildFrameOpts): MeshFrame {
+  const frame: MeshFrame = {
+    v: 1,
+    type: opts.type,
+    id: opts.id ?? makeMsgId(),
+    ts: nowIso(),
+  };
+  if (opts.from !== undefined) frame.from = opts.from;
+  if (opts.to !== undefined) frame.to = opts.to;
+  if (opts.room !== undefined) frame.room = opts.room;
+  if (opts.replyTo !== undefined) frame.replyTo = opts.replyTo;
+  if (opts.priority !== undefined) frame.priority = opts.priority;
+  if (opts.body !== undefined) {
+    frame.body = opts.body;
+    frame.bodyHash = sha256(opts.body);
+  }
+  if (opts.refs !== undefined) frame.refs = [...opts.refs];
+  if (opts.reasonHash !== undefined) frame.reasonHash = opts.reasonHash;
+  if (opts.expiresAt !== undefined) frame.expiresAt = opts.expiresAt;
+  if (opts.code !== undefined) frame.code = opts.code;
+  if (opts.status !== undefined) frame.status = opts.status;
+  if (opts.peers !== undefined) frame.peers = opts.peers;
+  if (opts.rooms !== undefined) frame.rooms = opts.rooms;
+  if (opts.role !== undefined) frame.role = opts.role;
+  if (opts.mailboxCount !== undefined) frame.mailboxCount = opts.mailboxCount;
+  if (opts.queuedAt !== undefined) frame.queuedAt = opts.queuedAt;
+  if (opts.interruptStatus !== undefined) frame.interruptStatus = opts.interruptStatus;
+  return frame;
+}
+
+// ---- Validate (§6.2) ----
+export type ValidationResult =
+  | { ok: true; frame: MeshFrame }
+  | { ok: false; code: MeshErrorCode; detail: string };
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+/** N1: strict ISO-8601 shape — Date.parse alone accepts '2024', 'March 5 2024'. */
+const ISO_8601_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})$/;
+
+function isValidIso(s: unknown): s is string {
+  return typeof s === "string" && ISO_8601_REGEX.test(s) && !Number.isNaN(Date.parse(s));
+}
+
+export interface ValidateOpts {
+  maxBodyBytes?: number;
+}
+
+/** Validate an arbitrary value against §6.2 rules. Unknown keys tolerated. */
+export function validateFrame(value: unknown, opts: ValidateOpts = {}): ValidationResult {
+  const maxBody = opts.maxBodyBytes ?? MAX_BODY_BYTES;
+  if (!isRecord(value)) return { ok: false, code: "invalid_frame", detail: "not an object" };
+
+  // Rule 1: v/type/id/ts
+  if (value.v !== 1) return { ok: false, code: "invalid_frame", detail: "v !== 1" };
+  if (typeof value.type !== "string" || !(FRAME_TYPES as readonly string[]).includes(value.type)) {
+    return { ok: false, code: "invalid_frame", detail: "unknown type" };
+  }
+  if (
+    typeof value.id !== "string" ||
+    value.id.length === 0 ||
+    value.id.length > MAX_FRAME_ID_CHARS
+  ) {
+    return { ok: false, code: "invalid_frame", detail: "bad id" };
+  }
+  if (!isValidIso(value.ts)) return { ok: false, code: "invalid_frame", detail: "bad ts" };
+
+  // Rule 2: aliases
+  for (const key of ["from", "to"] as const) {
+    const alias = value[key];
+    if (alias !== undefined && (typeof alias !== "string" || !isValidAlias(alias))) {
+      return { ok: false, code: "invalid_alias", detail: `bad ${key}` };
+    }
+  }
+
+  // Rule 3: room
+  if (value.room !== undefined && (typeof value.room !== "string" || !isValidRoom(value.room))) {
+    return { ok: false, code: "invalid_room", detail: "bad room" };
+  }
+
+  // Rule 4: body size + hash
+  if (value.body !== undefined) {
+    if (typeof value.body !== "string") {
+      return { ok: false, code: "invalid_frame", detail: "body not string" };
+    }
+    if (Buffer.byteLength(value.body, "utf8") > maxBody) {
+      return { ok: false, code: "invalid_frame", detail: "body too large" };
+    }
+    if (value.bodyHash !== undefined) {
+      if (typeof value.bodyHash !== "string" || !SHA256_HEX_REGEX.test(value.bodyHash)) {
+        return { ok: false, code: "invalid_frame", detail: "bad bodyHash" };
+      }
+      if (sha256(value.body) !== value.bodyHash) {
+        return { ok: false, code: "hash_mismatch", detail: "bodyHash mismatch" };
+      }
+    }
+  } else if (value.bodyHash !== undefined) {
+    return { ok: false, code: "invalid_frame", detail: "bodyHash without body" };
+  }
+
+  // priority / role enums
+  if (
+    value.priority !== undefined &&
+    !(PRIORITIES as readonly string[]).includes(value.priority as string)
+  ) {
+    return { ok: false, code: "invalid_frame", detail: "bad priority" };
+  }
+  if (value.role !== undefined && !(ROLES as readonly string[]).includes(value.role as string)) {
+    return { ok: false, code: "invalid_frame", detail: "bad role" };
+  }
+
+  // Rule 5: force ⇒ reasonHash
+  if (value.priority === "force") {
+    if (typeof value.reasonHash !== "string" || !SHA256_HEX_REGEX.test(value.reasonHash)) {
+      return { ok: false, code: "force_requires_reason", detail: "force without reasonHash" };
+    }
+  } else if (value.reasonHash !== undefined) {
+    if (typeof value.reasonHash !== "string" || !SHA256_HEX_REGEX.test(value.reasonHash)) {
+      return { ok: false, code: "invalid_frame", detail: "bad reasonHash" };
+    }
+  }
+
+  // Rule 6: reply/remind ⇒ replyTo
+  if (value.type === "reply" || value.type === "remind") {
+    if (typeof value.replyTo !== "string" || value.replyTo.length === 0) {
+      return { ok: false, code: "reply_without_target", detail: "missing replyTo" };
+    }
+  }
+  if (value.replyTo !== undefined && typeof value.replyTo !== "string") {
+    return { ok: false, code: "invalid_frame", detail: "bad replyTo" };
+  }
+
+  // Rule 7: refs
+  if (value.refs !== undefined) {
+    if (!Array.isArray(value.refs) || value.refs.length > MAX_REFS) {
+      return { ok: false, code: "invalid_frame", detail: "bad refs" };
+    }
+    for (const ref of value.refs) {
+      if (typeof ref !== "string" || !isValidRefPath(ref)) {
+        return { ok: false, code: "invalid_frame", detail: "bad ref path" };
+      }
+    }
+  }
+
+  // error frames: closed code set
+  if (value.type === "error") {
+    if (
+      typeof value.code !== "string" ||
+      !(ERROR_CODES as readonly string[]).includes(value.code)
+    ) {
+      return { ok: false, code: "invalid_frame", detail: "bad error code" };
+    }
+  }
+  if (value.expiresAt !== undefined && !isValidIso(value.expiresAt)) {
+    return { ok: false, code: "invalid_frame", detail: "bad expiresAt" };
+  }
+
+  return { ok: true, frame: value as unknown as MeshFrame };
+}
+
+/** Parse one NDJSON line into a validated frame. */
+export function parseFrameLine(line: string, opts: ValidateOpts = {}): ValidationResult {
+  let value: unknown;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    return { ok: false, code: "invalid_frame", detail: "JSON parse error" };
+  }
+  return validateFrame(value, opts);
+}

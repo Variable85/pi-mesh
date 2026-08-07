@@ -1,0 +1,18 @@
+{
+  "name": "pi-mesh",
+  "version": "0.1.0",
+  "description": "pi-mesh — Pi extension for live agent-to-agent communication: local broker, mesh.v1 protocol, honest delivered/read/answered statuses, hash-only ledger.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "smoke": "node scripts/mesh-smoke.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.6.0"
+  }
+}

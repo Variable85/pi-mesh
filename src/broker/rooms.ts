@@ -1,0 +1,124 @@
+// broker/rooms.ts — membership, roles, presence broadcast (D6, §6.5).
+import { buildFrame, isValidRoom, type MeshErrorCode, type MeshRole } from "../protocol/envelope.js";
+import {
+  DEFAULT_ROOM,
+  MAX_PEERS_PER_ROOM,
+  type MeshConfig,
+} from "../shared/config.js";
+import type { BrokerState, PeerRecord } from "./state.js";
+
+export type RoomResult = { ok: true } | { ok: false; code: MeshErrorCode };
+
+/** Join a room (creating it). Enforces caps and roomId syntax (§6.5). */
+export function joinRoom(
+  state: BrokerState,
+  config: MeshConfig,
+  peer: PeerRecord,
+  roomId: string,
+  role: MeshRole = "member",
+): RoomResult {
+  if (!isValidRoom(roomId)) return { ok: false, code: "invalid_room" };
+  if (peer.rooms.has(roomId)) {
+    peer.rooms.set(roomId, role); // role update on re-join
+    return { ok: true };
+  }
+  if (peer.rooms.size >= config.maxRoomsPerPeer) return { ok: false, code: "invalid_room" };
+  let members = state.rooms.get(roomId);
+  if (!members) {
+    members = new Set();
+    state.rooms.set(roomId, members);
+  }
+  if (!members.has(peer.alias) && members.size >= MAX_PEERS_PER_ROOM) {
+    return { ok: false, code: "invalid_room" };
+  }
+  members.add(peer.alias);
+  peer.rooms.set(roomId, role);
+  return { ok: true };
+}
+
+/** Leave a room; leaving the last room is refused (§6.5, E17). */
+export function leaveRoom(state: BrokerState, peer: PeerRecord, roomId: string): RoomResult {
+  if (!peer.rooms.has(roomId)) return { ok: false, code: "not_member" };
+  if (peer.rooms.size <= 1) return { ok: false, code: "last_room" };
+  peer.rooms.delete(roomId);
+  const members = state.rooms.get(roomId);
+  if (members) {
+    members.delete(peer.alias);
+    if (members.size === 0) state.rooms.delete(roomId);
+  }
+  // presence(offline-in-room) to remaining members of that room (§6.5)
+  broadcastToRoom(state, roomId, presenceFrame(peer.alias, "offline", roomId), peer.alias);
+  return { ok: true };
+}
+
+export function presenceFrame(
+  alias: string,
+  status: "online" | "offline",
+  room: string,
+): ReturnType<typeof buildFrame> {
+  return buildFrame({ type: "presence", from: alias, status, room });
+}
+
+/** Write a frame to every online member of a room (optionally excluding one). */
+export function broadcastToRoom(
+  state: BrokerState,
+  roomId: string,
+  frame: ReturnType<typeof buildFrame>,
+  excludeAlias?: string,
+  write?: (peer: PeerRecord, frame: ReturnType<typeof buildFrame>) => void,
+): void {
+  const members = state.rooms.get(roomId);
+  if (!members) return;
+  for (const alias of members) {
+    if (alias === excludeAlias) continue;
+    const peer = state.peers.get(alias);
+    if (peer && write) write(peer, frame);
+  }
+}
+
+/** Broadcast presence(online) to all rooms the peer belongs to (§6.5). */
+export function announceOnline(
+  state: BrokerState,
+  peer: PeerRecord,
+  write: (peer: PeerRecord, frame: ReturnType<typeof buildFrame>) => void,
+): void {
+  for (const roomId of peer.rooms.keys()) {
+    broadcastToRoom(state, roomId, presenceFrame(peer.alias, "online", roomId), peer.alias, write);
+  }
+}
+
+/** Detach peer from all rooms; returns room ids it belonged to. */
+export function detachFromRooms(state: BrokerState, peer: PeerRecord): string[] {
+  const roomIds = [...peer.rooms.keys()];
+  for (const roomId of roomIds) {
+    const members = state.rooms.get(roomId);
+    if (members) {
+      members.delete(peer.alias);
+      if (members.size === 0) state.rooms.delete(roomId);
+    }
+  }
+  peer.rooms.clear();
+  return roomIds;
+}
+
+/** Peers visible from a set of rooms (union), for welcome/status snapshots. */
+export function peersSnapshot(state: BrokerState, roomId?: string): {
+  alias: string;
+  rooms: string[];
+  role?: MeshRole;
+  since?: string;
+}[] {
+  const out: { alias: string; rooms: string[]; role?: MeshRole; since?: string }[] = [];
+  for (const peer of state.peers.values()) {
+    if (!peer.helloDone) continue;
+    if (roomId !== undefined && !peer.rooms.has(roomId)) continue;
+    const rooms = [...peer.rooms.keys()];
+    out.push({
+      alias: peer.alias,
+      rooms,
+      role: roomId !== undefined ? peer.rooms.get(roomId) : peer.rooms.get(DEFAULT_ROOM),
+      since: new Date(peer.connectedAt).toISOString(),
+    });
+  }
+  return out;
+}

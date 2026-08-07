@@ -1,0 +1,107 @@
+// extension/pi-types.ts — minimal LOCAL interfaces for the Pi ExtensionAPI surface.
+// ZERO imports from Pi packages (I9): the extension is a thin adapter (§9).
+// Tool parameters are plain JSON Schema objects (zero-dependency: NO typebox).
+
+/** JSON Schema object (plain, zero-dependency constraint). */
+export type JsonSchema = Record<string, unknown>;
+
+export interface ToolTextContent {
+  type: "text";
+  text: string;
+}
+
+export interface ToolResult {
+  content: ToolTextContent[];
+  details?: Record<string, unknown>;
+}
+
+/** Theme colors supported by the Pi TUI theme.fg (minimal local surface). */
+export type ThemeColor = "success" | "warning" | "error" | "muted" | "accent";
+
+export interface UiTheme {
+  fg(color: ThemeColor, text: string): string;
+}
+
+/** Context passed by Pi to tool execute / command handler / session hooks. */
+export interface SessionContext {
+  cwd: string;
+  ui: {
+    notify(message: string, opts?: { level?: string }): void;
+    /**
+     * Footer-widget above the editor by default; undefined clears it.
+     * SAFE form ONLY: string[] (pi wraps each line in a Text component and
+     * truncates itself). The factory form is FORBIDDEN here — its return
+     * value must be a component object with render(width), not string[].
+     */
+    setWidget(id: string, content: string[] | undefined): void;
+    /** Compact status in the built-in footer; undefined clears it. */
+    setStatus(id: string, text: string | undefined): void;
+    /** TUI theme (interactive sessions); absent in headless contexts. */
+    theme?: UiTheme;
+  };
+  /** Request abort of the current agent turn (force priority). Optional. */
+  abort?(): void;
+  /** True when the agent is idle (no running turn). Optional. */
+  isIdle?(): boolean;
+}
+
+export type ToolExecuteFn = (
+  toolCallId: string,
+  params: Record<string, unknown>,
+  signal: AbortSignal | undefined,
+  onUpdate: ((partial: ToolResult) => void) | undefined,
+  ctx: SessionContext,
+) => Promise<ToolResult>;
+
+export interface ToolDefinition {
+  name: string;
+  label: string;
+  description: string;
+  promptSnippet?: string;
+  promptGuidelines?: string;
+  /** Plain JSON Schema object — NOT typebox. */
+  parameters: JsonSchema;
+  execute: ToolExecuteFn;
+}
+
+export interface CommandDefinition {
+  description: string;
+  handler: (args: string, ctx: SessionContext) => void | Promise<void>;
+}
+
+export type DeliverAs = "followUp" | "steer";
+
+export interface InboundMessage {
+  customType: string;
+  content: string;
+  display: boolean;
+  details?: Record<string, unknown>;
+}
+
+export interface SendMessageOptions {
+  triggerTurn?: boolean;
+  deliverAs?: DeliverAs;
+}
+
+export type SessionEventName = "session_start" | "session_shutdown";
+
+export type SessionHookHandler = (
+  event: unknown,
+  ctx: SessionContext,
+) => void | Promise<void>;
+
+/** The subset of the Pi ExtensionAPI used by the mesh extension (§9.1). */
+export interface ExtensionAPI {
+  on(event: SessionEventName, handler: SessionHookHandler): void;
+  registerTool(tool: ToolDefinition): void;
+  registerCommand(name: string, def: CommandDefinition): void;
+  sendMessage(msg: InboundMessage, opts?: SendMessageOptions): void;
+  appendEntry(customType: string, data?: unknown): void;
+}
+
+/** Helper: a single-paragraph text tool result. */
+export function textResult(text: string, details?: Record<string, unknown>): ToolResult {
+  const out: ToolResult = { content: [{ type: "text", text }] };
+  if (details !== undefined) out.details = details;
+  return out;
+}
