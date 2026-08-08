@@ -75,10 +75,10 @@ The broker **auto-spawns** on first use (lockfile in `$TMPDIR/mesh-<uid>/`). No
 daemon management needed. Try `npm run smoke` for a full headless demo
 (2 clients, mailbox, broker-kill recovery).
 
-> Drop the extension into another Pi project: copy `extensions/mesh/` and the
-> `src/` tree into that project, or `pi install` this package — the `mesh_*`
-> tools + `/mesh` command are available. The extension is a thin adapter over
-> the client — everything else is self-contained Node.
+> Drop the extension into another Pi project: copy `index.ts` and the `src/`
+> tree into that project, or `pi install` this package — the `mesh_*` tools +
+> `/mesh` command are available. The extension is a thin adapter over the
+> client — everything else is self-contained Node.
 
 ## Releases & publishing
 
