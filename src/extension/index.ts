@@ -224,7 +224,7 @@ export default function meshExtension(pi: ExtensionAPI): void {
     client.connect().catch(() => {});
   });
 
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", async () => {
     const rt = runtime;
     runtime = null;
     const h = hud;
@@ -239,7 +239,17 @@ export default function meshExtension(pi: ExtensionAPI): void {
       } catch {
         // best effort (I10)
       }
-      rt.client.close().catch(() => {});
+      // AWAIT the close: /reload fires session_start right after this
+      // handler, and the new client re-hellos under the same alias. If the
+      // old socket is still alive at the broker, the hello is refused with
+      // alias_taken and the session falls back to a random alias. Waiting
+      // for the socket to actually close (bounded, ≤ ACK_TIMEOUT_MS) makes
+      // the alias handover clean.
+      try {
+        await rt.client.close();
+      } catch {
+        // best effort
+      }
     }
   });
 }
