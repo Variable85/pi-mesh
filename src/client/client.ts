@@ -710,7 +710,14 @@ export class MeshClient extends EventEmitter {
   async leave(room: string): Promise<void> {
     const frame = buildFrame({ type: "leave", from: this.alias, room });
     const ack = await this.roundTrip(frame);
-    if (ack.type === "error") throw new Error(ack.code ?? "internal");
+    if (ack.type === "error") {
+      if (ack.code === "not_member") {
+        // Resync: the broker does not know us in this room — make sure a
+        // future reconnect does not try to rejoin it.
+        this.joinedRooms.delete(room);
+      }
+      throw new Error(ack.code ?? "internal");
+    }
     this.joinedRooms.delete(room);
   }
 
@@ -720,11 +727,15 @@ export class MeshClient extends EventEmitter {
    * hello (broker state for the old alias — rooms, reservations, mailbox — is
    * dropped with the connection). On failure (e.g. alias_taken) the previous
    * alias is restored and the session reconnects under it.
+   * `unchanged: true` when the alias was already the requested one (no-op).
    */
-  async rename(newAlias: string): Promise<{ ok: true; alias: string } | { ok: false; reason: string }> {
+  async rename(newAlias: string): Promise<
+    | { ok: true; alias: string; unchanged?: boolean }
+    | { ok: false; reason: string }
+  > {
     const target = normalizeAlias(newAlias);
     if (!isValidAlias(target)) return { ok: false, reason: "invalid_alias" };
-    if (target === this.aliasInternal) return { ok: false, reason: "same_alias" };
+    if (target === this.aliasInternal) return { ok: true, alias: target, unchanged: true };
     if (!this.online) {
       try {
         await this.connect();

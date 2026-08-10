@@ -74,14 +74,30 @@ describe("client: in-flight alias rename", () => {
     assert.ok(snap.peers.some((p) => p.alias === "alice4"));
   });
 
-  it("invalid and identical aliases are refused locally", async () => {
+  it("invalid aliases are refused locally; same alias is a no-op success", async () => {
     assert.equal((await alice.rename("Bob!")).ok, false);
-    assert.equal((await alice.rename("alice4")).ok, false);
+    const same = await alice.rename("alice4");
+    assert.equal(same.ok, true);
+    assert.equal(same.unchanged, true);
     assert.equal(alice.alias, "alice4");
   });
 
   it("the renamed peer can still send and receive messages", async () => {
     const res = await alice.send({ to: "bob", message: "post-rename" });
     assert.equal(res.status, "delivered");
+  });
+
+  it("leave resyncs joinedRooms on not_member (no stale rejoin after reconnect)", async () => {
+    // Force a desync: the client believes it is in "ghost" (joinedRooms) but
+    // the broker no longer has the membership (e.g. state lost server-side).
+    await alice.join("ghost");
+    broker.state.peers.get("alice4")?.rooms.delete("ghost");
+    await assert.rejects(() => alice.leave("ghost"), /not_member/);
+    // After a rename (re-hello), the ghost room must NOT be re-declared.
+    const res = await alice.rename("alice5");
+    assert.equal(res.ok, true);
+    const snap = await alice.status();
+    const self = snap.peers.find((p) => p.alias === "alice5");
+    assert.ok(!self?.rooms.includes("ghost"));
   });
 });

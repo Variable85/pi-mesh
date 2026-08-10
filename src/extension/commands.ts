@@ -75,13 +75,15 @@ async function cmdJoin(
   asAlias?: string,
 ): Promise<void> {
   // `/mesh join <room> as <alias>`: rename first (re-hello), then join.
+  // A rename failure NEVER aborts the join — the session keeps its current
+  // alias and still joins the room (same_alias is a no-op success).
   if (asAlias !== undefined) {
     const renamed = await rt.client.rename(asAlias);
-    if (!renamed.ok) {
-      notify(ctx, `mesh: rename to "${asAlias}" failed: ${renamed.reason}`);
-      return;
+    if (renamed.ok) {
+      if (renamed.unchanged !== true) notify(ctx, `mesh: alias changed @${renamed.alias}`);
+    } else {
+      notify(ctx, `mesh: rename to "${asAlias}" failed: ${renamed.reason} — joining as @${rt.client.alias}`);
     }
-    notify(ctx, `mesh: alias changed @${renamed.alias}`);
   }
   if (room === undefined) {
     notify(ctx, "usage: /mesh join <room> [as <alias>] [observer]");
@@ -105,7 +107,15 @@ async function cmdLeave(rt: MeshRuntime, ctx: SessionContext, room: string | und
     await rt.client.leave(room);
     notify(ctx, `mesh: left ${room}`);
   } catch (err) {
-    notify(ctx, `mesh: leave failed: ${err instanceof Error ? err.message : String(err)}`);
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg === "not_member") {
+      // Honest + friendly: the broker does not know us in this room. The
+      // local joinedRooms set is resynced by client.leave() so a later
+      // reconnect does not try to rejoin it.
+      notify(ctx, `mesh: not in room "${room}" — nothing to leave`);
+    } else {
+      notify(ctx, `mesh: leave failed: ${msg}`);
+    }
   }
 }
 
