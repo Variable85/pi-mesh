@@ -1,5 +1,7 @@
 # pi-mesh — live agent-to-agent communication for Pi
 
+![pi-mesh preview](https://raw.githubusercontent.com/cgarrot/pi-mesh/main/assets/preview.jpg)
+
 **pi-mesh** is a standalone **Pi extension** for live agent-to-agent
 communication. Local Pi agents talk to each other in < 50 ms through a tiny
 local broker (unix socket, NDJSON frames, protocol `mesh.v1`). Presence is
