@@ -99,12 +99,20 @@ daemon management needed. Try `npm run smoke` for a full headless demo
 
 | tool | params | returns (honest one-liner + `details`) |
 |---|---|---|
-| `mesh_send` | `to`, `message`, `room?`, `priority?`, `reason?`, `awaitReply?`, `timeoutMs?`, `refs?` | `delivered` / `queued_offline` / `reply: …` / `expired` / `blocked: …` |
-| `mesh_reply` | `msgId`, `message`, `refs?` | `delivered` or `blocked: reply_without_target` |
+| `mesh_send` | `to?`, `message`, `room?`, `broadcast?`, `priority?`, `reason?`, `awaitReply?`, `timeoutMs?`, `refs?` | `delivered` / `queued_offline` / `reply: …` / `expired` / `blocked: …` |
+| `mesh_reply` | `msgId`, `message`, `replyAll?`, `to?`, `refs?` | `delivered` or `blocked: reply_without_target` |
 | `mesh_status` | `room?` | live broker snapshot (peers, rooms, **reservations**) |
 | `mesh_history` | `limit?`, `withBodies?` | local **memory ring** (never the ledger) |
 | `mesh_reserve` | `paths`, `reason?` | reserve files/dirs — peers' `edit`/`write` get blocked on them |
 | `mesh_release` | `paths?` (omit = all) | release reservations, peers notified immediately |
+
+**Broadcast & reply variants (D24)**: `mesh_send` with `broadcast: true` fans
+a message out to every member of `room` (omitting `to`), and the honest ack
+reports `deliveredCount/totalCount`. `mesh_reply` keeps strict 1:1 correlation
+by default, and adds two variants: `replyAll: true` answers the WHOLE room of
+the original message (counts in the ack), and `to: <alias>` targets another
+member than the original sender (e.g. bounce a mission to a colleague). The
+inbound format marks fan-outs: `(room ops, normal, broadcast)` / `reply-all`.
 
 Priorities: `normal` → followUp · `urgent` → steer · `force` → controlled abort
 (when the recipient is busy) + **delivery once the aborted turn settles**. `force`

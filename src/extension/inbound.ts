@@ -20,7 +20,8 @@ export interface InjectedInbound {
 export function formatInboundContent(frame: MeshFrame): string {
   const room = frame.room ?? "default";
   const priority = frame.priority ?? "normal";
-  const prefix = `[mesh] @${frame.from ?? "?"} (room ${room}, ${priority})`;
+  const fan = frame.broadcast === true ? ", broadcast" : frame.replyAll === true ? ", reply-all" : "";
+  const prefix = `[mesh] @${frame.from ?? "?"} (room ${room}, ${priority}${fan})`;
   if (frame.type === "remind") {
     const replyTo = frame.replyTo ?? frame.id;
     return (
@@ -29,16 +30,22 @@ export function formatInboundContent(frame: MeshFrame): string {
     );
   }
   if (frame.type === "reply") {
-    // Orphan reply (the original send did not awaitReply): make clear this
-    // is an ANSWER to an earlier message, not a new message.
+    // Orphan/answered reply (the original send did not awaitReply): make
+    // clear this is an ANSWER to an earlier message, not a new message.
     return (
       `${prefix} reply to ${frame.replyTo ?? "?"}: ${frame.body ?? ""}` +
-      `\n↩ answer back with the mesh_reply tool using msgId "${frame.id}"`
+      `\n↩ answer back with the mesh_reply tool using msgId "${frame.id}"` +
+      (frame.replyAll === true
+        ? " (this reply went to the whole room)"
+        : "")
     );
   }
   return (
     `${prefix} ${frame.body ?? ""}` +
-    `\n↩ reply with the mesh_reply tool using msgId "${frame.id}"`
+    `\n↩ reply with the mesh_reply tool using msgId "${frame.id}"` +
+    (frame.broadcast === true
+      ? ` (broadcast to ${frame.totalCount ?? "?"} members — use replyAll to answer the room, or reply to just @${frame.from ?? "?"})`
+      : "")
   );
 }
 

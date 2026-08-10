@@ -59,8 +59,14 @@ function str(v: unknown): string | undefined {
 function resultText(res: SendResult): string {
   switch (res.status) {
     case "delivered":
+      if (res.deliveredCount !== undefined && res.totalCount !== undefined) {
+        return `delivered ${res.msgId} (${res.deliveredCount}/${res.totalCount} online)`;
+      }
       return `delivered ${res.msgId}`;
     case "queued_offline":
+      if (res.deliveredCount !== undefined && res.totalCount !== undefined) {
+        return `queued_offline ${res.msgId} (${res.totalCount} targets offline)`;
+      }
       return `queued_offline ${res.msgId}`;
     case "reply":
       return `reply ${res.msgId}: ${res.response}`;
@@ -87,9 +93,13 @@ function safeLedger(rt: MeshRuntime, input: Parameters<MeshLedger["append"]>[0])
 const MESH_SEND_PARAMETERS: Record<string, unknown> = {
   type: "object",
   properties: {
-    to: { type: "string", description: "Target alias ('@' tolerated, case-insensitive)." },
+    to: { type: "string", description: "Target alias ('@' tolerated, case-insensitive). OMIT when broadcast: true." },
     message: { type: "string", description: "Message body (1..32 KiB)." },
-    room: { type: "string", description: "Room id (default: 'default')." },
+    room: { type: "string", description: "Room id (default: 'default'). Required for broadcast." },
+    broadcast: {
+      type: "boolean",
+      description: "Fan out to EVERY member of room (to must be omitted). Returns deliveredCount/totalCount.",
+    },
     priority: {
       type: "string",
       enum: ["normal", "urgent", "force"],
@@ -122,15 +132,22 @@ async function execMeshSend(
 ): Promise<ToolResult> {
   const rt = getRuntime();
   if (rt === null) return textResult("blocked: session_not_started", sendDetails({ status: "blocked", reason: "session_not_started" }));
+  const broadcast = params.broadcast === true;
   const toRaw = str(params.to);
   const message = str(params.message);
-  if (toRaw === undefined || message === undefined) {
-    return textResult("error: invalid_frame (to and message are required)", sendDetails({ status: "error", reason: "invalid_frame" }));
+  if (message === undefined) {
+    return textResult("error: invalid_frame (message is required)", sendDetails({ status: "error", reason: "invalid_frame" }));
+  }
+  if (!broadcast && toRaw === undefined) {
+    return textResult("error: invalid_frame (to is required unless broadcast: true)", sendDetails({ status: "error", reason: "invalid_frame" }));
+  }
+  if (broadcast && toRaw !== undefined) {
+    return textResult("error: broadcast_with_to (omit 'to' when broadcasting)", sendDetails({ status: "error", reason: "broadcast_with_to" }));
   }
   // A8: ledger records + tool details store the CANONICAL alias ('@Bob' → 'bob')
   // so ledger predicates are insensitive to how the model typed the alias.
   // Guards (checkSend) and client.send normalize idempotently; result text unchanged.
-  const to = normalizeAlias(toRaw);
+  const to = toRaw !== undefined ? normalizeAlias(toRaw) : "*"; // '*' = broadcast target
   const room = str(params.room) ?? DEFAULT_ROOM;
   const priority = (str(params.priority) ?? "normal") as MeshPriority;
   const reason = str(params.reason);
@@ -163,20 +180,32 @@ async function execMeshSend(
 
   // transcript: outbound frame WITH body (redacted at record time) — opt-in only.
   if (rt.transcript.isEnabled()) {
-    rt.transcript.record("out", buildFrame({ type: "msg", from: rt.client.alias, to, room, priority, body: message, refs }));
+    rt.transcript.record("out", buildFrame({ type: "msg", from: rt.client.alias, to, room, priority, body: message, refs, broadcast: broadcast ? true : undefined }));
   }
-  safeLedger(rt, { event: "sent", from: rt.client.alias, to, room, priority, bodyHash, reasonHash, refs });
+  safeLedger(rt, {
+    event: "sent", from: rt.client.alias, to, room, priority, bodyHash, reasonHash, refs,
+    code: broadcast ? "broadcast" : undefined,
+  });
 
-  const res = await rt.client.send({ to, message, room, priority, reason, awaitReply, timeoutMs, refs });
+  const res = await rt.client.send({
+    to: broadcast ? undefined : to,
+    message, room, priority, reason, awaitReply, timeoutMs, refs, broadcast,
+  });
 
   // C5: `delivered` is ledgered ONLY here — after the broker ack (client.send
   // resolves delivered exclusively post-ack).
   switch (res.status) {
     case "delivered":
-      safeLedger(rt, { event: "delivered", id: res.msgId, from: rt.client.alias, to, room, priority, bodyHash, reasonHash, refs });
+      safeLedger(rt, {
+        event: "delivered", id: res.msgId, from: rt.client.alias, to, room, priority, bodyHash, reasonHash, refs,
+        code: broadcast ? `broadcast:${res.deliveredCount ?? 0}/${res.totalCount ?? 0}` : undefined,
+      });
       break;
     case "queued_offline":
-      safeLedger(rt, { event: "queued_offline", id: res.msgId, from: rt.client.alias, to, room, priority, bodyHash, reasonHash, refs });
+      safeLedger(rt, {
+        event: "queued_offline", id: res.msgId, from: rt.client.alias, to, room, priority, bodyHash, reasonHash, refs,
+        code: broadcast ? `broadcast:${res.deliveredCount ?? 0}/${res.totalCount ?? 0}` : undefined,
+      });
       break;
     case "reply":
       safeLedger(rt, { event: "reply", id: res.msgId, from: rt.client.alias, to, room, priority, bodyHash, refs, code: res.outputHash });
@@ -196,6 +225,9 @@ async function execMeshSend(
     status: res.status,
     msgId: "msgId" in res ? res.msgId : undefined,
     to, room, priority, bodyHash,
+    broadcast: broadcast || undefined,
+    deliveredCount: "deliveredCount" in res ? res.deliveredCount : undefined,
+    totalCount: "totalCount" in res ? res.totalCount : undefined,
     reason: "reason" in res ? res.reason : undefined,
   });
   if (guard.warnings.includes(LOOP_GUARD_WARNING)) details.loopGuard = "matched";
@@ -228,6 +260,11 @@ async function execMeshReply(
   const refs = Array.isArray(params.refs)
     ? params.refs.filter((r): r is string => typeof r === "string")
     : undefined;
+  const replyAll = params.replyAll === true;
+  const toRaw = str(params.to);
+  if (replyAll && toRaw !== undefined) {
+    return textResult("error: reply_all_with_to (replyAll and to are mutually exclusive)", sendDetails({ status: "error", reason: "reply_all_with_to", msgId }));
+  }
   const bodyHash = sha256(message);
 
   if (!rt.client.isOnline()) {
@@ -251,25 +288,33 @@ async function execMeshReply(
   // B13 causal anchoring: 'sent' is ledgered BEFORE the network call,
   // mirroring execMeshSend ordering, enriched with to/room/priority from the
   // peeked original (undefined keys omitted by the ledger, as below).
-  safeLedger(rt, { event: "sent", from: rt.client.alias, to: orig.from, room: orig.room, priority: orig.priority, bodyHash, refs });
-  const res = await rt.client.reply(msgId, message, refs);
+  safeLedger(rt, {
+    event: "sent", from: rt.client.alias, to: toRaw ?? orig.from, room: orig.room, priority: orig.priority, bodyHash, refs,
+    code: replyAll ? "reply_all" : toRaw !== undefined ? "reply_to" : undefined,
+  });
+  const res = await rt.client.reply(msgId, message, { refs, to: toRaw, replyAll });
   if (res.status === "error" && res.reason === "reply_without_target") {
     // E9 defense in depth: inbox eviction between peek and reply.
     safeLedger(rt, { event: "blocked", id: msgId, from: rt.client.alias, bodyHash, refs, code: "reply_without_target" });
     return textResult("blocked: reply_without_target", sendDetails({ status: "blocked", reason: "reply_without_target", msgId, bodyHash }));
   }
   if (rt.transcript.isEnabled()) {
-    rt.transcript.record("out", buildFrame({ type: "reply", from: rt.client.alias, replyTo: msgId, body: message, refs }));
+    rt.transcript.record("out", buildFrame({
+      type: "reply", from: rt.client.alias, to: toRaw, room: orig.room, replyTo: msgId,
+      body: message, refs, replyAll: replyAll ? true : undefined,
+    }));
   }
   safeLedger(rt, {
     event: res.status === "delivered" ? "delivered" : "error",
     id: "msgId" in res ? res.msgId : msgId,
     from: rt.client.alias,
-    to: orig?.from,
+    to: toRaw ?? orig?.from,
     room: orig?.room,
     priority: orig?.priority,
     bodyHash, refs,
-    code: res.status === "delivered" ? undefined : ("reason" in res ? res.reason : "error"),
+    code: res.status === "delivered"
+      ? (replyAll ? `reply_all:${res.deliveredCount ?? 0}/${res.totalCount ?? 0}` : toRaw !== undefined ? "reply_to" : undefined)
+      : ("reason" in res ? res.reason : "error"),
   });
   return textResult(
     resultText(res),
@@ -277,9 +322,12 @@ async function execMeshReply(
       status: res.status,
       msgId: "msgId" in res ? res.msgId : msgId,
       replyTo: msgId,
-      to: orig?.from,
+      to: toRaw ?? orig?.from,
       room: orig?.room,
       priority: orig?.priority,
+      replyAll: replyAll || undefined,
+      deliveredCount: "deliveredCount" in res ? res.deliveredCount : undefined,
+      totalCount: "totalCount" in res ? res.totalCount : undefined,
       bodyHash,
       reason: "reason" in res ? res.reason : undefined,
     }),

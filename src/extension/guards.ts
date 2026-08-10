@@ -74,6 +74,8 @@ export class MeshGuards {
     }
 
     // 2. duplicate (to, room, bodyHash) inside the 10 s window
+    //    (broadcast sends share the synthetic target "*" so identical
+    //    broadcasts to the same room are also deduped)
     const dupKey = `${to}|${input.room}|${sha256(input.body)}`;
     const last = this.recent.get(dupKey);
     if (last !== undefined && now - last < DUPLICATE_WINDOW_MS) {

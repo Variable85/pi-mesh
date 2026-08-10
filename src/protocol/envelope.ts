@@ -53,6 +53,10 @@ export interface MeshFrame {
   queuedAt?: string; // mailbox frames (§7.7)
   interruptStatus?: string; // ack for force (§6.6)
   reservations?: FileReservation[]; // hello/welcome/reserve/status_res (D21)
+  broadcast?: boolean; // msg: fan-out to every room member (D24)
+  replyAll?: boolean; // reply: fan-out the answer to the whole room (D24)
+  deliveredCount?: number; // ack: broadcast/replyAll deliveries (D24)
+  totalCount?: number; // ack: broadcast/replyAll targets (D24)
   ts: string;
 }
 
@@ -201,6 +205,10 @@ export interface BuildFrameOpts {
   queuedAt?: string;
   interruptStatus?: string;
   reservations?: FileReservation[];
+  broadcast?: boolean;
+  replyAll?: boolean;
+  deliveredCount?: number;
+  totalCount?: number;
 }
 
 /** Build a protocol-valid frame; bodyHash auto-computed when body present. */
@@ -232,6 +240,10 @@ export function buildFrame(opts: BuildFrameOpts): MeshFrame {
   if (opts.queuedAt !== undefined) frame.queuedAt = opts.queuedAt;
   if (opts.interruptStatus !== undefined) frame.interruptStatus = opts.interruptStatus;
   if (opts.reservations !== undefined) frame.reservations = [...opts.reservations];
+  if (opts.broadcast !== undefined) frame.broadcast = opts.broadcast;
+  if (opts.replyAll !== undefined) frame.replyAll = opts.replyAll;
+  if (opts.deliveredCount !== undefined) frame.deliveredCount = opts.deliveredCount;
+  if (opts.totalCount !== undefined) frame.totalCount = opts.totalCount;
   return frame;
 }
 
@@ -354,6 +366,40 @@ export function validateFrame(value: unknown, opts: ValidateOpts = {}): Validati
   // Rule 8: reservations (hello/welcome/reserve/status_res) — shape-checked
   if (value.reservations !== undefined && !isValidReservations(value.reservations)) {
     return { ok: false, code: "invalid_frame", detail: "bad reservations" };
+  }
+
+  // Rule 9: broadcast / replyAll fan-out (D24)
+  if (value.broadcast !== undefined) {
+    if (typeof value.broadcast !== "boolean") {
+      return { ok: false, code: "invalid_frame", detail: "bad broadcast" };
+    }
+    if (value.broadcast === true) {
+      if (value.to !== undefined) {
+        return { ok: false, code: "invalid_frame", detail: "broadcast with to" };
+      }
+      if (typeof value.room !== "string") {
+        return { ok: false, code: "invalid_room", detail: "broadcast without room" };
+      }
+    }
+  }
+  if (value.replyAll !== undefined) {
+    if (typeof value.replyAll !== "boolean") {
+      return { ok: false, code: "invalid_frame", detail: "bad replyAll" };
+    }
+    if (value.replyAll === true) {
+      if (value.to !== undefined) {
+        return { ok: false, code: "invalid_frame", detail: "replyAll with to" };
+      }
+      if (value.type !== "reply") {
+        return { ok: false, code: "invalid_frame", detail: "replyAll on non-reply" };
+      }
+    }
+  }
+  for (const key of ["deliveredCount", "totalCount"] as const) {
+    const n = value[key];
+    if (n !== undefined && (typeof n !== "number" || !Number.isInteger(n) || n < 0)) {
+      return { ok: false, code: "invalid_frame", detail: `bad ${key}` };
+    }
   }
 
   // error frames: closed code set

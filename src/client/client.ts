@@ -51,7 +51,7 @@ export interface StatusSnapshot {
 }
 
 export interface SendOpts {
-  to: string;
+  to?: string;
   message: string;
   room?: string;
   priority?: MeshPriority;
@@ -59,13 +59,27 @@ export interface SendOpts {
   awaitReply?: boolean;
   timeoutMs?: number;
   refs?: string[];
+  /** D24: fan out to every room member (room required, to must be absent). */
+  broadcast?: boolean;
+}
+
+export interface ReplyOpts {
+  refs?: string[];
+  /** D24: target a different member than the original sender. */
+  to?: string;
+  /** D24: fan the answer out to the whole room of the original message. */
+  replyAll?: boolean;
 }
 
 export type SendResult =
-  | { status: "delivered"; msgId: string }
-  | { status: "queued_offline"; msgId: string }
+  | { status: "delivered"; msgId: string; deliveredCount?: number; totalCount?: number }
+  | { status: "queued_offline"; msgId: string; deliveredCount?: number; totalCount?: number }
   | { status: "reply"; msgId: string; response: string; outputHash: string }
   | { status: "expired" | "blocked" | "error"; msgId?: string; reason: string };
+
+export function isBroadcastResult(res: SendResult): res is Extract<SendResult, { deliveredCount?: number }> {
+  return res.status === "delivered" || res.status === "queued_offline";
+}
 
 export interface MeshClientOpts {
   alias?: string;
@@ -518,9 +532,15 @@ export class MeshClient extends EventEmitter {
   // ---- send / reply ----
 
   async send(opts: SendOpts): Promise<SendResult> {
-    const to = normalizeAlias(opts.to);
-    if (!isValidAlias(to)) return { status: "error", reason: "invalid_alias" };
-    if (to === this.alias) return { status: "blocked", reason: "self_send" };
+    const broadcast = opts.broadcast === true;
+    const to = opts.to !== undefined ? normalizeAlias(opts.to) : undefined;
+    if (broadcast) {
+      // D24: broadcast needs a room and must NOT carry a target
+      if (to !== undefined) return { status: "error", reason: "broadcast_with_to" };
+    } else {
+      if (to === undefined || !isValidAlias(to)) return { status: "error", reason: "invalid_alias" };
+      if (to === this.alias) return { status: "blocked", reason: "self_send" };
+    }
     // Room resolution: explicit room wins; otherwise prefer "default" when
     // still joined, else the first joined room (the client may have left
     // "default" — sending into it would be refused as not_member).
@@ -564,6 +584,7 @@ export class MeshClient extends EventEmitter {
       priority,
       body: opts.message,
       refs: opts.refs,
+      broadcast: broadcast ? true : undefined,
       reasonHash: priority === "force" ? sha256(opts.reason ?? "") : undefined,
       expiresAt,
     });
@@ -571,7 +592,7 @@ export class MeshClient extends EventEmitter {
     // register pending BEFORE write to avoid a reply/registration race
     let pendingPromise: Promise<import("./pending.js").PendingResolution> | null = null;
     if (opts.awaitReply) {
-      this.awaitTargets.set(frame.id, { to, room });
+      this.awaitTargets.set(frame.id, { to: to ?? "*", room });
       pendingPromise = this.pending.register(frame.id, Date.now() + timeoutMs);
     }
 
@@ -591,8 +612,22 @@ export class MeshClient extends EventEmitter {
     }
 
     if (!opts.awaitReply || pendingPromise === null) {
-      if (ack.status === "delivered") return { status: "delivered", msgId: frame.id };
-      if (ack.status === "queued_offline") return { status: "queued_offline", msgId: frame.id };
+      if (ack.status === "delivered") {
+        return {
+          status: "delivered",
+          msgId: frame.id,
+          deliveredCount: ack.deliveredCount,
+          totalCount: ack.totalCount,
+        };
+      }
+      if (ack.status === "queued_offline") {
+        return {
+          status: "queued_offline",
+          msgId: frame.id,
+          deliveredCount: ack.deliveredCount,
+          totalCount: ack.totalCount,
+        };
+      }
       // N2: an unknown/unexpected ack status (e.g. dropped_offline on a msg)
       // is an honest error — never misreported as delivered.
       return {
@@ -619,10 +654,14 @@ export class MeshClient extends EventEmitter {
     return { status: "error", msgId: frame.id, reason: resolution.reason ?? "error" };
   }
 
-  async reply(msgId: string, body: string, refs?: string[]): Promise<SendResult> {
+  async reply(msgId: string, body: string, opts: ReplyOpts = {}): Promise<SendResult> {
     const original = this.inbox.get(msgId);
     if (!original || original.from === undefined) {
       return { status: "error", msgId, reason: "reply_without_target" }; // E9
+    }
+    const { refs, to, replyAll } = opts;
+    if (replyAll === true && to !== undefined) {
+      return { status: "error", msgId, reason: "reply_all_with_to" };
     }
     if (Buffer.byteLength(body, "utf8") > MAX_BODY_BYTES) {
       return { status: "error", msgId, reason: "invalid_frame: body too large" };
@@ -637,14 +676,23 @@ export class MeshClient extends EventEmitter {
         return { status: "blocked", msgId, reason: "broker_unavailable" };
       }
     }
+    // D24 reply variants:
+    //  - default: to the original sender (1:1, I5)
+    //  - to=<alias>: targeted at another member of the conversation
+    //  - replyAll: fan out to the whole room of the original message
+    const target = replyAll === true ? undefined : to !== undefined ? normalizeAlias(to) : original.from;
+    if (replyAll !== true && (target === undefined || !isValidAlias(target))) {
+      return { status: "error", msgId, reason: "invalid_alias" };
+    }
     const frame = buildFrame({
       type: "reply",
       from: this.alias,
-      to: original.from,
+      to: target,
       room: original.room,
       replyTo: msgId,
       body,
       refs,
+      replyAll: replyAll === true ? true : undefined,
     });
     const ackPromise = this.waitAck(frame.id);
     this.writeOrQueue(frame);
@@ -656,7 +704,12 @@ export class MeshClient extends EventEmitter {
     if (ack.status === "dropped_offline") {
       return { status: "error", msgId: frame.id, reason: "dropped_offline" };
     }
-    return { status: "delivered", msgId: frame.id };
+    return {
+      status: "delivered",
+      msgId: frame.id,
+      deliveredCount: ack.deliveredCount,
+      totalCount: ack.totalCount,
+    };
   }
 
   /** D8: client-side remind, broker stays mute. Max 2 enforced by PendingReplies. */

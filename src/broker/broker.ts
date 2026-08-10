@@ -109,8 +109,49 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
     id: string,
     status: "delivered" | "queued_offline" | "dropped_offline" | "ok",
     interruptStatus?: string,
+    deliveredCount?: number,
+    totalCount?: number,
   ): void => {
-    sendTo(peer, buildFrame({ type: "ack", id, status, interruptStatus }));
+    sendTo(peer, buildFrame({ type: "ack", id, status, interruptStatus, deliveredCount, totalCount }));
+  };
+
+  /** D24: replyAll — fan the answer out to every ONLINE room member (except the
+   *  sender). Replies are never mailboxed (same policy as unicast replies). */
+  const routeReplyAll = (from: PeerRecord, frame: MeshFrame): void => {
+    const room = frame.room ?? DEFAULT_ROOM;
+    const members = state.rooms.get(room);
+    if (members === undefined || members.size <= 1) {
+      sendAck(from, frame.id, "dropped_offline");
+      return;
+    }
+    const writes: Promise<boolean>[] = [];
+    let total = 0;
+    for (const alias of members) {
+      if (alias === from.alias) continue;
+      const t = state.peers.get(alias);
+      if (t !== undefined && t.helloDone && !t.socket.destroyed) {
+        total += 1;
+        const target = t;
+        writes.push(
+          new Promise<boolean>((resolve) => {
+            writeFrame(target.socket, frame, config.maxFrameBytes, (ok) => {
+              if (ok) {
+                state.stats.relayed += 1;
+                resolve(true);
+              } else {
+                if (state.peers.get(target.alias) === target) closePeer(state, target.alias, "write_failure");
+                resolve(false);
+              }
+            });
+          }),
+        );
+      }
+    }
+    void Promise.all(writes).then((results) => {
+      const delivered = results.filter(Boolean).length;
+      if (delivered > 0) sendAck(from, frame.id, "delivered", undefined, delivered, total);
+      else sendAck(from, frame.id, "dropped_offline");
+    });
   };
 
   // ---- §7.3 handlers ----
@@ -183,6 +224,76 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
   const routeMsg = (from: PeerRecord, frame: MeshFrame): void => {
     const to = frame.to;
     const room = frame.room ?? DEFAULT_ROOM;
+    // D24: broadcast → fan out to every room member (except the sender).
+    if (frame.broadcast === true) {
+      if (!from.rooms.has(room)) {
+        state.stats.refused += 1;
+        sendError(from.socket, "not_member", frame.id);
+        return;
+      }
+      if (from.rooms.get(room) === "observer") {
+        state.stats.refused += 1;
+        sendError(from.socket, "observer_readonly", frame.id); // E16
+        return;
+      }
+      const members = state.rooms.get(room);
+      if (members === undefined || members.size <= 1) {
+        state.stats.refused += 1;
+        sendError(from.socket, "peer_not_found", frame.id);
+        return;
+      }
+      const priority = frame.priority ?? "normal";
+      const kind: RateKind = priority === "force" ? "force" : priority === "urgent" ? "urgent" : "msg";
+      if (!checkRate(state, from.alias, kind, policy.rateLimits)) {
+        state.stats.refused += 1;
+        sendError(from.socket, "rate_limited", frame.id);
+        return;
+      }
+      const decision = evaluatePolicy(policy, { from: from.alias, to: "*", room, priority });
+      if (decision.action === "deny") {
+        state.stats.refused += 1;
+        sendError(from.socket, decision.code, frame.id);
+        return;
+      }
+      // deliver to every member: online → socket, offline-known → mailbox
+      const writes: Promise<boolean>[] = [];
+      let total = 0;
+      let queued = 0;
+      for (const alias of members) {
+        if (alias === from.alias) continue;
+        total += 1;
+        const t = state.peers.get(alias);
+        if (t !== undefined && t.helloDone && !t.socket.destroyed) {
+          const target = t;
+          writes.push(
+            new Promise<boolean>((resolve) => {
+              writeFrame(target.socket, frame, config.maxFrameBytes, (ok) => {
+                if (ok) {
+                  resolve(true);
+                } else {
+                  // B2: identity guard — a re-hello may have replaced the record.
+                  if (state.peers.get(target.alias) === target) closePeer(state, target.alias, "write_failure");
+                  enqueueMailbox(state, config, target.alias, frame);
+                  queued += 1;
+                  resolve(false);
+                }
+              });
+            }),
+          );
+        } else if (state.knownAliases.has(alias)) {
+          enqueueMailbox(state, config, alias, frame);
+          queued += 1;
+        }
+      }
+      void Promise.all(writes).then((results) => {
+        const delivered = results.filter(Boolean).length;
+        state.stats.relayed += delivered;
+        const status: "delivered" | "queued_offline" =
+          delivered > 0 ? "delivered" : "queued_offline";
+        sendAck(from, frame.id, status, undefined, delivered, total);
+      });
+      return;
+    }
     if (to === undefined) {
       state.stats.refused += 1;
       sendError(from.socket, "invalid_frame", frame.id);
@@ -311,7 +422,8 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
         sendAck(peer, frame.id, "ok");
         break;
       case "reply":
-        routeOnlineOnly(peer, frame, false);
+        if (frame.replyAll === true) routeReplyAll(peer, frame);
+        else routeOnlineOnly(peer, frame, false);
         break;
       case "remind":
         routeOnlineOnly(peer, frame, true);
