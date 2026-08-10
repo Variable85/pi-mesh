@@ -8,6 +8,7 @@ import {
   hudStatusText,
   renderHudLines,
   selfRooms,
+  visiblePeers,
   type HudState,
 } from "../src/extension/hud.js";
 
@@ -171,5 +172,33 @@ describe("selfRooms (D27): HUD shows the session's rooms, not the mesh-wide list
       peers: [{ alias: "main", rooms: [] }],
     };
     assert.deepEqual(selfRooms(snap, "main", ["voice"]), []);
+  });
+});
+
+describe("visiblePeers (D27): HUD peers share a room with the session", () => {
+  const snap = {
+    rooms: ["cs-room", "voice"],
+    peers: [
+      { alias: "main", rooms: ["voice"] },
+      { alias: "agent-1", rooms: ["cs-room"] },
+      { alias: "agent-2", rooms: ["cs-room", "voice"] },
+    ],
+  };
+
+  it("a session alone in voice sees only peers sharing voice", () => {
+    assert.deepEqual(visiblePeers(snap, "main", ["voice"]), ["agent-2"]);
+  });
+
+  it("a cs-room session sees only the peers sharing cs-room", () => {
+    // main (voice only) shares NO room with agent-1 → not visible
+    assert.deepEqual(visiblePeers(snap, "agent-1", ["cs-room"]), ["agent-2"]);
+  });
+
+  it("no snapshot → no peers yet", () => {
+    assert.deepEqual(visiblePeers(null, "main", ["voice"]), []);
+  });
+
+  it("zero rooms → no visible peers (cannot talk to anyone)", () => {
+    assert.deepEqual(visiblePeers(snap, "main", []), []);
   });
 });

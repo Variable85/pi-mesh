@@ -32,6 +32,26 @@ export function selfRooms(
   return [...fallback];
 }
 
+/**
+ * D27: peers VISIBLE from this session — those sharing at least one room
+ * with the self (the mesh messaging rule). The raw snapshot lists every
+ * peer of the broker (all rooms): a session alone in "voice" must not see
+ * the cs-room agents as its peers.
+ */
+export function visiblePeers(
+  snapshot: StatusSnapshot | null,
+  selfAlias: string,
+  selfRoomList: readonly string[],
+): string[] {
+  if (snapshot === null) return [];
+  const mine = new Set(selfRoomList);
+  // no rooms → no visibility at all (the session cannot talk to anyone)
+  if (mine.size === 0) return [];
+  return snapshot.peers
+    .filter((p) => p.alias !== selfAlias && p.rooms.some((r) => mine.has(r)))
+    .map((p) => p.alias);
+}
+
 export type HudActivity =
   | { kind: "inbound"; from: string; room: string; preview: string; ts: number }
   | { kind: "expired"; msgId: string; ts: number };
@@ -221,6 +241,7 @@ export class MeshHud {
   private buildState(): HudState {
     const rt = this.deps.getRuntime();
     const self = rt?.client.alias ?? "";
+    const rooms = selfRooms(this.snapshot, self, rt?.client.rooms ?? []);
     return {
       connected: rt?.client.isOnline() === true,
       connecting: this.connecting,
@@ -230,8 +251,9 @@ export class MeshHud {
       // broker's truth), falling back to the local joinedRooms before the
       // first snapshot arrives. (Bug: a new session in room "voice" showed
       // "@cs-room,voice" because it listed every room of the mesh.)
-      rooms: selfRooms(this.snapshot, self, rt?.client.rooms ?? []),
-      peers: (this.snapshot?.peers ?? []).map((p) => p.alias).filter((a) => a !== self),
+      rooms,
+      // D27: only peers sharing a room with this session are visible.
+      peers: visiblePeers(this.snapshot, self, rooms),
       pending: rt?.client.pendingCount ?? 0,
       transcriptOn: rt?.transcript.isEnabled() === true,
       ledgerFailures: rt?.ledgerFailures ?? 0,
