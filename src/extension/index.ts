@@ -8,6 +8,7 @@ import { registerCommands } from "./commands.js";
 import { MeshGuards } from "./guards.js";
 import { MeshHud } from "./hud.js";
 import { injectInbound } from "./inbound.js";
+import { identityFromClient, MeshIdentity } from "./identity.js";
 import { MeshLedger } from "./ledger.js";
 import type { ExtensionAPI } from "./pi-types.js";
 import { findConflict } from "./reservations.js";
@@ -81,13 +82,26 @@ export default function meshExtension(pi: ExtensionAPI): void {
   registerTools(pi, getRuntime);
   registerCommands(pi, getRuntime, () => hud?.onLocalChange());
 
+  /** Persist the current client state as this session's identity (D23). */
+  const saveIdentity = (rt: MeshRuntime): void => {
+    rt.identity.save(identityFromClient(rt.sessionId, rt.client));
+  };
+
   pi.on("session_start", (_event, ctx) => {
     const sDir = stateDir(); // <cwd>/.mesh or $MESH_STATE_DIR (D19)
     const rDir = runtimeDir();
     const config = loadConfig(sDir);
+    // D23: the pi sessionId is stable across /reload — reuse the persisted
+    // identity (alias, rooms, reservations) so the agent does NOT lose its
+    // mesh identity when the extension is reloaded.
+    const sessionId = ctx.sessionManager?.getSessionId() ?? "";
+    const identity = new MeshIdentity(sDir);
+    const persisted = identity.load(sessionId);
     const client = new MeshClient({
-      alias: config.alias,
-      rooms: config.rooms,
+      // explicit config.alias always wins; then the persisted alias; else random
+      alias: config.alias ?? persisted?.alias,
+      rooms: persisted !== null && persisted.rooms.length > 0 ? persisted.rooms : config.rooms,
+      initialReservations: persisted?.reservations,
       runtimeDir: rDir,
       config,
     });
@@ -102,11 +116,14 @@ export default function meshExtension(pi: ExtensionAPI): void {
       ctx,
       stateDir: sDir,
       runtimeDir: rDir,
+      sessionId,
+      identity,
       startedAt: Date.now(),
       ledgerFailures: 0,
       transcriptFailures: 0,
       injectionFailures: 0,
     };
+    const rt = runtime;
 
     client.on("inbound", (frame) => {
       const rt = runtime;
@@ -135,6 +152,9 @@ export default function meshExtension(pi: ExtensionAPI): void {
     client.on("ready", (welcome: WelcomeInfo) => {
       hud?.setConnecting(false);
       hud?.fetchStatus(); // fire-and-forget, never blocks session_start
+      // D23: persist identity as soon as we are connected (covers the very
+      // first connect AND every reconnect/rename).
+      if (rt !== null) saveIdentity(rt);
       // D21 identity: tell the agent who it is, once per connection, so it
       // never has to guess its alias (the old file-based mesh had agents
       // confusing each other's identities). display:false keeps it out of
@@ -153,6 +173,16 @@ export default function meshExtension(pi: ExtensionAPI): void {
         },
         { triggerTurn: false },
       );
+    });
+    client.on("renamed", () => {
+      if (rt !== null) saveIdentity(rt);
+    });
+    client.on("alias_fallback", ({ from, to }: { from: string; to: string }) => {
+      // Another live peer holds our persisted alias (e.g. crashed session) —
+      // we took a random one; persist it so the next reload does not fight
+      // for the same alias again.
+      if (rt !== null) saveIdentity(rt);
+      ctx.ui.notify(`mesh: alias @${from} taken — now connected as @${to}`, { level: "warning" });
     });
     client.on("closed", () => hud?.onClosed());
     client.on("expired", ({ msgId }) => hud?.noteExpired(msgId));
@@ -201,6 +231,14 @@ export default function meshExtension(pi: ExtensionAPI): void {
     hud = null;
     h?.detach(); // clears BOTH widget and status
     if (rt !== null) {
+      // D23: persist the identity BEFORE closing — the broker purges
+      // alias/rooms/reservations with the connection, and the next
+      // session_start (e.g. /reload) re-loads them from disk.
+      try {
+        saveIdentity(rt);
+      } catch {
+        // best effort (I10)
+      }
       rt.client.close().catch(() => {});
     }
   });

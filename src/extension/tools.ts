@@ -16,6 +16,7 @@ import {
 } from "../shared/config.js";
 import type { MeshGuards } from "./guards.js";
 import { LOOP_GUARD_WARNING } from "./guards.js";
+import { identityFromClient, type MeshIdentity } from "./identity.js";
 import type { MeshLedger } from "./ledger.js";
 import type { ExtensionAPI, SessionContext, ToolResult } from "./pi-types.js";
 import { textResult } from "./pi-types.js";
@@ -30,6 +31,10 @@ export interface MeshRuntime {
   ctx: SessionContext | null;
   stateDir: string;
   runtimeDir: string;
+  /** Pi session id — stable across /reload (identity key, D23). */
+  sessionId: string;
+  /** Identity persistence (alias/rooms/reservations survive reloads). */
+  identity: MeshIdentity;
   startedAt: number;
   /** B1: inbound-path disk/injection failure counters (see index.ts). */
   ledgerFailures: number;
@@ -386,6 +391,8 @@ async function execMeshReserve(
   const res = await rt.client.reserve(rawPaths, reason);
   if (res.status === "delivered") {
     safeLedger(rt, { event: "reserved", id: res.msgId, from: rt.client.alias, refs: rawPaths, code: reason });
+    // D23: reservations must survive /reload → persist identity now.
+    rt.identity.save(identityFromClient(rt.sessionId, rt.client));
     return textResult(`reserved ${rawPaths.length} path(s) — peers notified`, sendDetails({ status: "delivered", paths: rawPaths, reason }));
   }
   const resReason = "reason" in res ? res.reason : "error";
@@ -418,6 +425,8 @@ async function execMeshRelease(
   const res = await rt.client.release(rawPaths);
   if (res.status === "delivered") {
     safeLedger(rt, { event: "released", from: rt.client.alias, refs: res.released.length > 0 ? res.released : undefined });
+    // D23: persist the reduced reservation set before returning.
+    rt.identity.save(identityFromClient(rt.sessionId, rt.client));
     return textResult(
       res.released.length > 0
         ? `released: ${res.released.join(", ")}`

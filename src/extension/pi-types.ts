@@ -25,6 +25,10 @@ export interface UiTheme {
 /** Context passed by Pi to tool execute / command handler / session hooks. */
 export interface SessionContext {
   cwd: string;
+  /** Pi session manager (read-only surface) — stable sessionId across reloads. */
+  sessionManager?: {
+    getSessionId(): string;
+  };
   ui: {
     notify(message: string, opts?: { level?: string }): void;
     /**

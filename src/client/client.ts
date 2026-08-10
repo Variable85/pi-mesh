@@ -70,6 +70,8 @@ export type SendResult =
 export interface MeshClientOpts {
   alias?: string;
   rooms?: string[];
+  /** Reservations to declare at hello (persisted identity reload). */
+  initialReservations?: FileReservation[];
   runtimeDir?: string;
   config?: Partial<MeshConfig>;
   onFrame?: (f: MeshFrame) => void;
@@ -108,6 +110,7 @@ export class MeshClient extends EventEmitter {
   private socket: Socket | null = null;
   private online = false;
   private intentionallyClosed = false;
+  private aliasFallbackDone = false;
   private connecting: Promise<WelcomeInfo> | null = null;
   private reconnectAttempt = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -135,12 +138,20 @@ export class MeshClient extends EventEmitter {
     this.runtimeDir = opts.runtimeDir ?? runtimeDir();
     this.config = { ...DEFAULT_CONFIG, ...opts.config, rooms: this.initialRooms };
     this.noReconnect = opts.noReconnect === true;
+    if (opts.initialReservations !== undefined) {
+      this.ownReservations = opts.initialReservations.map((r) => ({ ...r }));
+    }
     if (opts.onFrame) this.on("frame", opts.onFrame);
     this.pending = new PendingReplies((msgId) => this.sendRemind(msgId));
   }
 
   get alias(): string {
     return this.aliasInternal;
+  }
+
+  /** All rooms this client is a member of (re-declared at every hello). */
+  get rooms(): readonly string[] {
+    return [...this.joinedRooms];
   }
 
   isOnline(): boolean {
@@ -215,10 +226,38 @@ export class MeshClient extends EventEmitter {
     }
     // explicit connect re-arms auto-reconnect after a prior close()
     this.intentionallyClosed = false;
-    this.connecting ??= this.doConnect().finally(() => {
+    this.connecting ??= this.doConnectWithAliasFallback().finally(() => {
       this.connecting = null;
     });
     return this.connecting;
+  }
+
+  /**
+   * doConnect, but on alias_taken (another live peer holds our alias — e.g.
+   * a crashed session that never cleanly disconnected) fall back to a fresh
+   * random alias instead of looping forever. Emits `alias_fallback` so the
+   * extension can notify the user and persist the new identity.
+   */
+  private async doConnectWithAliasFallback(): Promise<WelcomeInfo> {
+    try {
+      return await this.doConnect();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("alias_taken") && !this.aliasFallbackDone) {
+        this.aliasFallbackDone = true;
+        const previous = this.aliasInternal;
+        this.aliasInternal = defaultAlias();
+        try {
+          const welcome = await this.doConnect();
+          this.emit("alias_fallback", { from: previous, to: this.aliasInternal });
+          return welcome;
+        } catch {
+          this.aliasFallbackDone = false;
+          throw err; // surface the original alias_taken
+        }
+      }
+      throw err;
+    }
   }
 
   private async doConnect(): Promise<WelcomeInfo> {
@@ -775,11 +814,12 @@ export class MeshClient extends EventEmitter {
       });
     }
 
-    // 2. re-hello under the new alias
+    // 2. re-hello under the new alias. NO alias_fallback here: rename()
+    //    handles alias_taken itself (restore the previous identity below).
     this.aliasInternal = target;
     this.intentionallyClosed = false;
     try {
-      await this.connect();
+      await this.doConnect();
     } catch (err) {
       // restore the previous identity so the session stays usable
       this.aliasInternal = oldAlias;

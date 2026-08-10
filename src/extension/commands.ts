@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import type { MeshRole } from "../protocol/envelope.js";
 import { brokerLockPath, brokerSocketPath } from "../shared/paths.js";
+import { identityFromClient } from "./identity.js";
 import type { ExtensionAPI, SessionContext } from "./pi-types.js";
 import type { GetRuntime, MeshRuntime } from "./tools.js";
 
@@ -18,6 +19,15 @@ const HELP_TEXT = [
 
 function notify(ctx: SessionContext, message: string): void {
   ctx.ui.notify(message, { level: "info" });
+}
+
+/** D23: persist alias/rooms after a mutation (join/leave/rename). */
+function persistIdentity(rt: MeshRuntime): void {
+  try {
+    rt.identity.save(identityFromClient(rt.sessionId, rt.client));
+  } catch {
+    // best effort (I10)
+  }
 }
 
 /**
@@ -80,7 +90,10 @@ async function cmdJoin(
   if (asAlias !== undefined) {
     const renamed = await rt.client.rename(asAlias);
     if (renamed.ok) {
-      if (renamed.unchanged !== true) notify(ctx, `mesh: alias changed @${renamed.alias}`);
+      if (renamed.unchanged !== true) {
+        notify(ctx, `mesh: alias changed @${renamed.alias}`);
+        persistIdentity(rt);
+      }
     } else {
       notify(ctx, `mesh: rename to "${asAlias}" failed: ${renamed.reason} — joining as @${rt.client.alias}`);
     }
@@ -93,6 +106,7 @@ async function cmdJoin(
   try {
     await rt.client.join(room, role);
     notify(ctx, `mesh: joined ${room} as ${role}`);
+    persistIdentity(rt);
   } catch (err) {
     notify(ctx, `mesh: join failed: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -106,6 +120,7 @@ async function cmdLeave(rt: MeshRuntime, ctx: SessionContext, room: string | und
   try {
     await rt.client.leave(room);
     notify(ctx, `mesh: left ${room}`);
+    persistIdentity(rt);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg === "not_member") {
@@ -126,7 +141,12 @@ async function cmdAlias(rt: MeshRuntime, ctx: SessionContext, alias: string | un
   }
   const renamed = await rt.client.rename(alias);
   if (renamed.ok) {
-    notify(ctx, `mesh: alias changed @${renamed.alias}`);
+    if (renamed.unchanged !== true) {
+      notify(ctx, `mesh: alias changed @${renamed.alias}`);
+      persistIdentity(rt);
+    } else {
+      notify(ctx, `mesh alias: @${rt.client.alias}`);
+    }
   } else {
     notify(ctx, `mesh: rename to "${alias}" failed: ${renamed.reason}`);
   }
