@@ -159,8 +159,9 @@ live peer is refused (`alias_taken`) and the session keeps its previous
 identity.
 
 **Identity survives `/reload`**: alias, rooms and reservations are persisted
-in `<stateDir>/identity.json`, keyed by the pi sessionId (stable across
-extension reloads). After a reload the agent comes back with the exact same
+in `<stateDir>/identity-<sessionId>.json` — one file per pi session (stable
+across extension reloads, and multiple sessions sharing a stateDir never
+overwrite each other). After a reload the agent comes back with the exact same
 mesh identity — no more random alias, lost rooms or vanished reservations.
 Stale persisted reservations older than 24 h are dropped at load, and if a
 crashed session still holds the alias, the client falls back to a random one
@@ -207,7 +208,8 @@ Env overrides: `MESH_ALIAS`, `MESH_ROOMS`, `MESH_RUNTIME_DIR`,
 - **I11** file reservations live with the connection: declared at `hello`,
   broadcast on every change, gone when the peer disconnects (D21).
 - **I12** identity persistence (D23): alias/rooms/reservations are stored per
-  pi-sessionId in `<stateDir>/identity.json` and re-declared on reload.
+  pi-sessionId in `<stateDir>/identity-<sessionId>.json` and re-declared on
+  reload; sessions sharing a stateDir stay isolated (one file per session).
 
 ## Known limitations (v1)
 

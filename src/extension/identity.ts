@@ -6,16 +6,24 @@
 // is created — with a NEW random alias. The agent "loses" its mesh identity
 // on every reload.
 //
-// Fix: persist the identity per pi-sessionId in <stateDir>/identity.json.
-// The pi sessionId is stable across reloads (the session manager survives),
-// so a reload re-loads the exact same alias, rooms and reservations.
-// A different sessionId (new session, fork) gets a fresh identity.
+// Fix: persist the identity per pi-sessionId in
+// <stateDir>/identity-<sessionId>.json — ONE FILE PER SESSION, because many
+// sessions share the same stateDir (<cwd>/.mesh): a single shared file would
+// be overwritten by every session's shutdown, making the others lose their
+// identity on the next reload. The pi sessionId is stable across reloads
+// (the session manager survives), so a reload re-loads the exact same alias,
+// rooms and reservations. A different sessionId (new session, fork) gets a
+// fresh identity.
+//
+// Migration: a legacy single-file <stateDir>/identity.json (v0.1.3-v0.1.7)
+// is read once and moved to the per-session file when its sessionId matches.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { nowIso } from "../protocol/frames.js";
 import { isValidReservations, type FileReservation } from "../protocol/envelope.js";
 
-export const IDENTITY_FILE_NAME = "identity.json";
+export const IDENTITY_FILE_NAME = "identity.json"; // legacy single-file name
+export const IDENTITY_PREFIX = "identity-";
 export const IDENTITY_VERSION = 1;
 /** Persisted reservations older than this are NOT re-declared at hello. */
 export const RESERVATION_TTL_MS = 86_400_000; // 24 h
@@ -61,28 +69,29 @@ function freshReservations(list: FileReservation[], now: number = Date.now()): F
 export class MeshIdentity {
   constructor(private readonly stateDir: string) {}
 
-  private get path(): string {
+  /** Per-session file: <stateDir>/identity-<sessionId>.json */
+  private pathFor(sessionId: string): string {
+    return path.join(this.stateDir, `${IDENTITY_PREFIX}${sessionId}.json`);
+  }
+
+  private get legacyPath(): string {
     return path.join(this.stateDir, IDENTITY_FILE_NAME);
   }
 
-  /**
-   * Load the identity belonging to `sessionId`. Returns null when absent,
-   * from another session, malformed, or on an older version — callers then
-   * start fresh (random alias, default rooms, no reservations).
-   */
-  load(sessionId: string): PersistedIdentity | null {
-    if (sessionId === "") return null;
+  private parse(raw: string, sessionId: string): PersistedIdentity | null {
     try {
-      const raw: unknown = JSON.parse(readFileSync(this.path, "utf8"));
-      if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
-      const id = raw as Record<string, unknown>;
+      const value: unknown = JSON.parse(raw);
+      if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+      const id = value as Record<string, unknown>;
       if (id.version !== IDENTITY_VERSION) return null;
       if (id.sessionId !== sessionId) return null;
       if (typeof id.alias !== "string" || id.alias === "") return null;
       const rooms = Array.isArray(id.rooms)
         ? id.rooms.filter((r): r is string => typeof r === "string")
         : [];
-      const reservations = isValidReservations(id.reservations) ? freshReservations(id.reservations) : [];
+      const reservations = isValidReservations(id.reservations)
+        ? freshReservations(id.reservations)
+        : [];
       return {
         version: IDENTITY_VERSION,
         sessionId,
@@ -96,29 +105,55 @@ export class MeshIdentity {
     }
   }
 
+  /**
+   * Load the identity belonging to `sessionId`. Returns null when absent,
+   * from another session, malformed, or on an older version — callers then
+   * start fresh (random alias, default rooms, no reservations).
+   */
+  load(sessionId: string): PersistedIdentity | null {
+    if (sessionId === "") return null;
+    try {
+      const raw = readFileSync(this.pathFor(sessionId), "utf8");
+      return this.parse(raw, sessionId);
+    } catch {
+      // fall through to the legacy single-file identity (v0.1.3-v0.1.7)
+    }
+    try {
+      const raw = readFileSync(this.legacyPath, "utf8");
+      const id = this.parse(raw, sessionId);
+      if (id === null) return null;
+      // migrate: move the legacy file to the per-session file, then remove it
+      try {
+        mkdirSync(this.stateDir, { recursive: true });
+        renameSync(this.legacyPath, this.pathFor(sessionId));
+      } catch {
+        // best effort — the legacy file may be re-read next time
+      }
+      return id;
+    } catch {
+      return null;
+    }
+  }
+
   /** Persist atomically (tmp + rename). Best effort — never throws (I10). */
   save(identity: PersistedIdentity): void {
     try {
       mkdirSync(this.stateDir, { recursive: true });
-      const tmp = this.path + ".tmp";
+      const target = this.pathFor(identity.sessionId);
+      const tmp = target + ".tmp";
       writeFileSync(tmp, JSON.stringify(identity, null, 2) + "\n", "utf8");
-      renameSync(tmp, this.path);
+      renameSync(tmp, target);
     } catch {
       // best effort
     }
   }
-
-  /** True when an identity file exists for this session (informational). */
-  exists(sessionId: string): boolean {
-    return this.load(sessionId) !== null;
-  }
 }
 
-/** Not exported for tests: the file path is derived from the state dir. */
-export function identityPath(stateDir: string): string {
-  return path.join(stateDir, IDENTITY_FILE_NAME);
+/** Path of the per-session identity file (exported for tests). */
+export function identityPath(stateDir: string, sessionId: string): string {
+  return path.join(stateDir, `${IDENTITY_PREFIX}${sessionId}.json`);
 }
 
-export function identityFileExists(stateDir: string): boolean {
-  return existsSync(identityPath(stateDir));
+export function identityFileExists(stateDir: string, sessionId: string): boolean {
+  return existsSync(identityPath(stateDir, sessionId));
 }

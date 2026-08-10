@@ -40,7 +40,7 @@ describe("MeshIdentity persistence", () => {
       assert.equal(loaded?.alias, "agent-7");
       assert.deepEqual(loaded?.rooms, ["default", "ops"]);
       assert.equal(loaded?.reservations[0]?.pattern, "web/x.js");
-      assert.ok(identityFileExists(dir));
+      assert.ok(identityFileExists(dir, SID));
     } finally {
       cleanup();
     }
@@ -92,8 +92,45 @@ describe("MeshIdentity persistence", () => {
   it("corrupt file → null (graceful)", () => {
     const { dir, cleanup } = tmpStateDir();
     try {
-      writeFileSync(identityPath(dir), "{not json", "utf8");
+      writeFileSync(identityPath(dir, SID), "{not json", "utf8");
       assert.equal(new MeshIdentity(dir).load(SID), null);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("sessions sharing a stateDir do NOT overwrite each other (the multi-agent bug)", () => {
+    const { dir, cleanup } = tmpStateDir();
+    try {
+      const id = new MeshIdentity(dir);
+      const sidA = "019faaaa-0000-7000-8000-000000000001";
+      const sidB = "019faaaa-0000-7000-8000-000000000002";
+      id.save(identityFromClient(sidA, { alias: "agent-1", rooms: ["cs-room"], reservations: [] }));
+      id.save(identityFromClient(sidB, { alias: "agent-2", rooms: ["cs-room"], reservations: [] }));
+      // agent-2's save must NOT clobber agent-1's file
+      assert.equal(id.load(sidA)?.alias, "agent-1");
+      assert.equal(id.load(sidB)?.alias, "agent-2");
+      assert.equal(identityFileExists(dir, sidA), true);
+      assert.equal(identityFileExists(dir, sidB), true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("legacy single-file identity.json is migrated to the per-session file", () => {
+    const { dir, cleanup } = tmpStateDir();
+    try {
+      // write the legacy format (v0.1.3-v0.1.7: one file, sessionId inside)
+      writeFileSync(
+        identityPath(dir, "").replace("identity-.json", "identity.json"),
+        JSON.stringify(identityFromClient(SID, { alias: "agent-1", rooms: ["cs-room"], reservations: [] })),
+        "utf8",
+      );
+      const id = new MeshIdentity(dir);
+      const loaded = id.load(SID);
+      assert.equal(loaded?.alias, "agent-1");
+      assert.deepEqual(loaded?.rooms, ["cs-room"]);
+      assert.ok(identityFileExists(dir, SID), "migrated to per-session file");
     } finally {
       cleanup();
     }
