@@ -16,6 +16,22 @@ export const HUD_PREVIEW_MAX = 60;
 /** Presence-triggered status() refreshes: at most 1/s, trailing. */
 export const HUD_STATUS_REFRESH_MIN_MS = 1_000;
 
+/**
+ * D27: the rooms the HUD must display — the SELF peer's rooms from the
+ * broker snapshot (authoritative), falling back to the local joinedRooms
+ * before the first snapshot arrives. The snapshot's top-level `rooms` field
+ * is the broker-WIDE list and must never be shown as "my rooms".
+ */
+export function selfRooms(
+  snapshot: StatusSnapshot | null,
+  selfAlias: string,
+  fallback: readonly string[],
+): string[] {
+  const peer = snapshot?.peers.find((p) => p.alias === selfAlias);
+  if (peer !== undefined) return peer.rooms;
+  return [...fallback];
+}
+
 export type HudActivity =
   | { kind: "inbound"; from: string; room: string; preview: string; ts: number }
   | { kind: "expired"; msgId: string; ts: number };
@@ -209,7 +225,12 @@ export class MeshHud {
       connected: rt?.client.isOnline() === true,
       connecting: this.connecting,
       alias: self !== "" ? self : "?",
-      rooms: this.snapshot?.rooms ?? [],
+      // D27: the status snapshot's `rooms` is the broker-wide room list, NOT
+      // this session's rooms — the HUD must show the SELF peer's rooms (the
+      // broker's truth), falling back to the local joinedRooms before the
+      // first snapshot arrives. (Bug: a new session in room "voice" showed
+      // "@cs-room,voice" because it listed every room of the mesh.)
+      rooms: selfRooms(this.snapshot, self, rt?.client.rooms ?? []),
       peers: (this.snapshot?.peers ?? []).map((p) => p.alias).filter((a) => a !== self),
       pending: rt?.client.pendingCount ?? 0,
       transcriptOn: rt?.transcript.isEnabled() === true,

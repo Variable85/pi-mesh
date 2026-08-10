@@ -7,6 +7,7 @@ import {
   HUD_PREVIEW_MAX,
   hudStatusText,
   renderHudLines,
+  selfRooms,
   type HudState,
 } from "../src/extension/hud.js";
 
@@ -145,5 +146,30 @@ describe("hud: purity + status text", () => {
     assert.equal(hudStatusText(base({ peers: ["a", "b", "c"] })), "mesh:3");
     assert.equal(hudStatusText(base({ connected: false, connecting: true })), "mesh:…");
     assert.equal(hudStatusText(base({ connected: false, connecting: false })), "mesh:off");
+  });
+});
+
+describe("selfRooms (D27): HUD shows the session's rooms, not the mesh-wide list", () => {
+  it("returns the SELF peer's rooms from the snapshot", () => {
+    const snap = {
+      rooms: ["cs-room", "voice"], // broker-wide — must NOT be used
+      peers: [
+        { alias: "main", rooms: ["voice"] },
+        { alias: "agent-1", rooms: ["cs-room"] },
+      ],
+    };
+    assert.deepEqual(selfRooms(snap, "main", ["default"]), ["voice"]);
+  });
+
+  it("falls back to local joinedRooms before the first snapshot", () => {
+    assert.deepEqual(selfRooms(null, "main", ["default", "voice"]), ["default", "voice"]);
+  });
+
+  it("empty self rooms stay empty (peer left every room)", () => {
+    const snap = {
+      rooms: ["cs-room"],
+      peers: [{ alias: "main", rooms: [] }],
+    };
+    assert.deepEqual(selfRooms(snap, "main", ["voice"]), []);
   });
 });
