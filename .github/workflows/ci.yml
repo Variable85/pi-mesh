@@ -1,0 +1,20 @@
+name: CI
+
+# Runs the full suite (build + tests + smoke) on every push to main and on
+# pull requests — same as the other pi packages (pi-voice-stt, …).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run ci
