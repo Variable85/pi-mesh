@@ -115,8 +115,11 @@ coordinate via `mesh_send`. Reservations **live with the connection** (like
 presence): a disconnected peer's reservations vanish automatically, and every
 change is broadcast to all peers in < 50 ms.
 
-Command: `/mesh status [room] · join <room> [observer] · leave <room> · alias ·
-log [on|off] · ping <alias> · broker · help`.
+Command: `/mesh status [room] · join <room> [as <alias>] [observer] ·
+leave <room> · alias [<new-alias>] · log [on|off] · ping <alias> · broker ·
+help`. `join … as <alias>` renames this session live (re-hello under the new
+alias, rooms + reservations re-declared) and then joins the room — so a
+session can claim `agent-1` at any time, not just at startup.
 
 **HUD**: a live widget above the editor shows mesh state at a glance —
 `mesh ● alice @default,ops · peers: bob,carol(+3) · pend:2 · tx:on` — with the
@@ -144,6 +147,12 @@ node dist/src/cli/mesh.js doctor      # socket? lock stale? pid? protocol?
 { "alias": "alice", "rooms": ["default"], "transcript": false,
   "mailboxCap": 100, "mailboxTtlMs": 3600000, "ledgerMaxBytes": 5242880 }
 ```
+
+Aliases can also be set at runtime: `/mesh join ops as agent-1` claims the
+alias `agent-1` and joins room `ops` in one step, and
+`/mesh alias <new-alias>` renames at any time. An alias already held by a
+live peer is refused (`alias_taken`) and the session keeps its previous
+identity.
 
 `.mesh/policy.json` (declarative governance, evaluated at send time):
 
@@ -190,8 +199,8 @@ Env overrides: `MESH_ALIAS`, `MESH_ROOMS`, `MESH_RUNTIME_DIR`,
 
 - **Mailbox is volatile**: broker restart loses queued offline messages.
   Senders always get the honest `queued_offline` status.
-- **Loopback only**: unix socket on one machine, no network, no auth/encryption.
-- One alias per Pi session; no in-flight alias change.
+- **Loopback only**: unix socket (named pipe on Windows) on one machine,
+  no network, no auth/encryption.
 - No room broadcast: messages are strictly **unicast** (`to=<alias>` required).
   A room carries presence + authorization only (roles `member`/`observer`,
   `policy`) — sending "into a room" only touches the explicit recipient.

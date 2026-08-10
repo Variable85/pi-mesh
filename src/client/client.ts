@@ -96,8 +96,11 @@ function defaultAlias(): string {
 }
 
 export class MeshClient extends EventEmitter {
-  readonly alias: string;
+  /** Current alias — mutable via rename() (in-flight alias change). */
+  private aliasInternal: string;
   private readonly initialRooms: string[];
+  /** All rooms this client is (or will be) a member of — re-declared at hello. */
+  private readonly joinedRooms: Set<string>;
   private readonly runtimeDir: string;
   private readonly config: MeshConfig;
   private readonly noReconnect: boolean;
@@ -126,13 +129,18 @@ export class MeshClient extends EventEmitter {
 
   constructor(opts: MeshClientOpts = {}) {
     super();
-    this.alias = normalizeAlias(opts.alias ?? defaultAlias());
+    this.aliasInternal = normalizeAlias(opts.alias ?? defaultAlias());
     this.initialRooms = opts.rooms ?? [...DEFAULT_CONFIG.rooms];
+    this.joinedRooms = new Set(this.initialRooms);
     this.runtimeDir = opts.runtimeDir ?? runtimeDir();
     this.config = { ...DEFAULT_CONFIG, ...opts.config, rooms: this.initialRooms };
     this.noReconnect = opts.noReconnect === true;
     if (opts.onFrame) this.on("frame", opts.onFrame);
     this.pending = new PendingReplies((msgId) => this.sendRemind(msgId));
+  }
+
+  get alias(): string {
+    return this.aliasInternal;
   }
 
   isOnline(): boolean {
@@ -200,7 +208,7 @@ export class MeshClient extends EventEmitter {
     if (this.online && this.socket) {
       return Promise.resolve({
         alias: this.alias,
-        rooms: this.initialRooms,
+        rooms: [...this.joinedRooms],
         peers: [],
         mailboxCount: 0,
       });
@@ -235,7 +243,7 @@ export class MeshClient extends EventEmitter {
         const hello = buildFrame({
           type: "hello",
           from: this.alias,
-          rooms: [...this.initialRooms],
+          rooms: [...this.joinedRooms],
           reservations: this.ownReservations.length > 0 ? [...this.ownReservations] : undefined,
         });
         socket.write(encodeFrame(hello, this.config.maxFrameBytes));
@@ -264,7 +272,7 @@ export class MeshClient extends EventEmitter {
               for (const p of frame.peers ?? []) this.applyPeerReservations(p.alias, p.reservations);
               resolve({
                 alias: this.alias,
-                rooms: frame.rooms ?? [...this.initialRooms],
+                rooms: frame.rooms ?? [...this.joinedRooms],
                 peers: frame.peers ?? [],
                 mailboxCount: frame.mailboxCount ?? 0,
               });
@@ -294,6 +302,9 @@ export class MeshClient extends EventEmitter {
   }
 
   private onSocketClosed(): void {
+    // An explicit connect() is in flight — it owns the socket lifecycle.
+    // Ignore stale closes from sockets we have already replaced (rename path).
+    if (this.connecting) return;
     const wasOnline = this.online;
     this.online = false;
     this.socket = null;
@@ -693,12 +704,78 @@ export class MeshClient extends EventEmitter {
     const frame = buildFrame({ type: "join", from: this.alias, room, role });
     const ack = await this.roundTrip(frame);
     if (ack.type === "error") throw new Error(ack.code ?? "internal");
+    this.joinedRooms.add(room);
   }
 
   async leave(room: string): Promise<void> {
     const frame = buildFrame({ type: "leave", from: this.alias, room });
     const ack = await this.roundTrip(frame);
     if (ack.type === "error") throw new Error(ack.code ?? "internal");
+    this.joinedRooms.delete(room);
+  }
+
+  /**
+   * In-flight alias change: detach from the broker under the old alias, then
+   * re-hello under the new one. Rooms and reservations are re-declared in the
+   * hello (broker state for the old alias — rooms, reservations, mailbox — is
+   * dropped with the connection). On failure (e.g. alias_taken) the previous
+   * alias is restored and the session reconnects under it.
+   */
+  async rename(newAlias: string): Promise<{ ok: true; alias: string } | { ok: false; reason: string }> {
+    const target = normalizeAlias(newAlias);
+    if (!isValidAlias(target)) return { ok: false, reason: "invalid_alias" };
+    if (target === this.aliasInternal) return { ok: false, reason: "same_alias" };
+    if (!this.online) {
+      try {
+        await this.connect();
+      } catch {
+        return { ok: false, reason: "broker_unavailable" };
+      }
+    }
+    const oldAlias = this.aliasInternal;
+    const oldSocket = this.socket;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    // 1. detach the old alias (no reconnect loop — intentionallyClosed)
+    this.intentionallyClosed = true;
+    this.stopHeartbeat();
+    this.pending.cancelAll("renamed");
+    this.socket = null;
+    this.online = false;
+    if (oldSocket && !oldSocket.destroyed) {
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, ACK_TIMEOUT_MS);
+        t.unref();
+        oldSocket.once("close", () => {
+          clearTimeout(t);
+          resolve();
+        });
+        oldSocket.end();
+      });
+    }
+
+    // 2. re-hello under the new alias
+    this.aliasInternal = target;
+    this.intentionallyClosed = false;
+    try {
+      await this.connect();
+    } catch (err) {
+      // restore the previous identity so the session stays usable
+      this.aliasInternal = oldAlias;
+      this.intentionallyClosed = true;
+      try {
+        await this.connect();
+      } catch {
+        // broker down entirely — nothing more we can do
+      }
+      const detail = err instanceof Error ? err.message : String(err);
+      return { ok: false, reason: detail.includes("alias_taken") ? "alias_taken" : detail };
+    }
+    this.emit("renamed", { from: oldAlias, to: target });
+    return { ok: true, alias: target };
   }
 
   private async roundTrip(frame: MeshFrame): Promise<MeshFrame> {

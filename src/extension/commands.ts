@@ -7,9 +7,9 @@ import type { GetRuntime, MeshRuntime } from "./tools.js";
 
 const HELP_TEXT = [
   "/mesh status [room]   — broker snapshot (online peers, rooms)",
-  "/mesh join <room> [observer]",
+  "/mesh join <room> [as <alias>] [observer]",
   "/mesh leave <room>",
-  "/mesh alias           — show this session's alias",
+  "/mesh alias [<new-alias>] — show, or change this session's alias live",
   "/mesh log [on|off]    — opt-in transcript (redacted bodies)",
   "/mesh ping <alias>    — send a one-shot ping message",
   "/mesh broker          — socket path, lock pid, session state",
@@ -18,6 +18,24 @@ const HELP_TEXT = [
 
 function notify(ctx: SessionContext, message: string): void {
   ctx.ui.notify(message, { level: "info" });
+}
+
+/**
+ * Parse `/mesh join <room> [as <alias>] [observer]` args.
+ * Pure, exported for tests.
+ */
+export function parseJoinArgs(args: string[]): {
+  room?: string;
+  asAlias?: string;
+  observer: boolean;
+} {
+  const rest = args.filter((a) => a !== "observer");
+  const observer = args.includes("observer");
+  const asIdx = rest.indexOf("as");
+  if (asIdx === -1) return { room: rest[0], observer };
+  const asAlias = rest[asIdx + 1];
+  if (asIdx === 0) return { asAlias, observer };
+  return { room: rest[0], asAlias, observer };
 }
 
 function pidAlive(pid: number): boolean {
@@ -54,9 +72,19 @@ async function cmdJoin(
   ctx: SessionContext,
   room: string | undefined,
   observer: boolean,
+  asAlias?: string,
 ): Promise<void> {
+  // `/mesh join <room> as <alias>`: rename first (re-hello), then join.
+  if (asAlias !== undefined) {
+    const renamed = await rt.client.rename(asAlias);
+    if (!renamed.ok) {
+      notify(ctx, `mesh: rename to "${asAlias}" failed: ${renamed.reason}`);
+      return;
+    }
+    notify(ctx, `mesh: alias changed @${renamed.alias}`);
+  }
   if (room === undefined) {
-    notify(ctx, "usage: /mesh join <room> [observer]");
+    notify(ctx, "usage: /mesh join <room> [as <alias>] [observer]");
     return;
   }
   const role: MeshRole = observer ? "observer" : "member";
@@ -78,6 +106,19 @@ async function cmdLeave(rt: MeshRuntime, ctx: SessionContext, room: string | und
     notify(ctx, `mesh: left ${room}`);
   } catch (err) {
     notify(ctx, `mesh: leave failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+async function cmdAlias(rt: MeshRuntime, ctx: SessionContext, alias: string | undefined): Promise<void> {
+  if (alias === undefined) {
+    notify(ctx, `mesh alias: @${rt.client.alias}`);
+    return;
+  }
+  const renamed = await rt.client.rename(alias);
+  if (renamed.ok) {
+    notify(ctx, `mesh: alias changed @${renamed.alias}`);
+  } else {
+    notify(ctx, `mesh: rename to "${alias}" failed: ${renamed.reason}`);
   }
 }
 
@@ -152,16 +193,20 @@ export function registerCommands(
         case "status":
           await cmdStatus(rt, ctx, rest[0]);
           break;
-        case "join":
-          await cmdJoin(rt, ctx, rest[0], rest.includes("observer"));
+        case "join": {
+          // `/mesh join <room> [as <alias>] [observer]`
+          const parsed = parseJoinArgs(rest);
+          await cmdJoin(rt, ctx, parsed.room, parsed.observer, parsed.asAlias);
           onChanged?.();
           break;
+        }
         case "leave":
           await cmdLeave(rt, ctx, rest[0]);
           onChanged?.();
           break;
         case "alias":
-          notify(ctx, `mesh alias: @${rt.client.alias}`);
+          await cmdAlias(rt, ctx, rest[0]);
+          onChanged?.();
           break;
         case "log":
           cmdLog(rt, ctx, rest[0]);
