@@ -55,7 +55,7 @@ export function handleInboundFrame(
   } catch {
     deps.counters.transcriptFailures += 1;
   }
-  if (frame.type === "msg" || frame.type === "mailbox" || frame.type === "remind") {
+  if (frame.type === "msg" || frame.type === "mailbox" || frame.type === "remind" || frame.type === "reply") {
     try {
       deps.ledger.append({
         event: "inbound",

@@ -62,23 +62,61 @@ describe("client: awaitReply lifecycle", () => {
     assert.ok(reminds.every((r) => r.replyTo === res.msgId));
   });
 
-  it("E8: late reply after expiry → ignored by pending, no reply event", async (t) => {
+  it("E8: late reply after expiry → no pending match, but surfaced as inbound (not lost)", async (t) => {
     const { alice, bob } = await fixture(t);
-    let msgId = "";
-    bob.once("inbound", (f) => {
-      if (f.type === "msg") msgId = f.id;
+    const msgIdP = new Promise<string>((resolve) => {
+      bob.once("inbound", (f: MeshFrame) => {
+        if (f.type === "msg") resolve(f.id);
+      });
     });
     let replyEvent = false;
     alice.on("reply", () => {
       replyEvent = true;
     });
+    const orphanP = new Promise<MeshFrame>((resolve) => {
+      alice.on("inbound", (f: MeshFrame) => {
+        if (f.type === "reply") resolve(f);
+      });
+    });
     const res = await alice.send({ to: "bob", message: "answer-me", awaitReply: true, timeoutMs: 300 });
     assert.equal(res.status, "expired");
+    const msgId = await msgIdP;
     assert.notEqual(msgId, "");
     const rres = await bob.reply(msgId, "too-late");
     assert.equal(rres.status, "delivered"); // broker routes it…
-    await sleep(200); // …but the expired pending ignores it (counted in pending.test)
-    assert.equal(replyEvent, false);
+    const orphan = await orphanP;
+    assert.equal(replyEvent, false); // …the expired pending ignores it…
+    assert.equal(orphan.body, "too-late"); // …but the answer is NOT lost
+    assert.equal(orphan.replyTo, msgId);
+  });
+
+  it("orphan reply (sender did not awaitReply) is surfaced as inbound — the cs-room bug", async (t) => {
+    const { alice, bob } = await fixture(t);
+    // both in the same non-default room, like the cs-room sessions
+    await alice.join("cs-room");
+    await bob.join("cs-room");
+    const receivedP = new Promise<MeshFrame>((resolve) => {
+      bob.once("inbound", (f: MeshFrame) => {
+        if (f.type === "msg") resolve(f);
+      });
+    });
+    const orphanP = new Promise<MeshFrame>((resolve) => {
+      alice.on("inbound", (f: MeshFrame) => {
+        if (f.type === "reply") resolve(f);
+      });
+    });
+    // alice sends WITHOUT awaitReply (fire-and-forget, like the missions)
+    const res = await alice.send({ to: "bob", message: "MISSION RE A", room: "cs-room" });
+    assert.equal(res.status, "delivered");
+    const received = await receivedP;
+    // bob answers with mesh_reply → delivered on the wire
+    const rres = await bob.reply(received.id, "MISSION COMPLETE");
+    assert.equal(rres.status, "delivered");
+    // alice's session MUST see the answer now
+    const orphan = await orphanP;
+    assert.equal(orphan.body, "MISSION COMPLETE");
+    assert.equal(orphan.from, "bob");
+    assert.equal(orphan.room, "cs-room");
   });
 
   it("awaitReply happy path: reply resolves with response + outputHash", async (t) => {

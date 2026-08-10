@@ -418,7 +418,18 @@ export class MeshClient extends EventEmitter {
         break;
       case "reply": {
         const matched = this.pending.handleReply(frame);
-        if (matched) this.emit("reply", frame);
+        if (matched) {
+          // awaited reply — the send() promise already carries the answer
+          this.emit("reply", frame);
+        } else {
+          // ORPHAN reply: the sender did not awaitReply, so no pending
+          // exists — but the answer must still reach the session. Surface it
+          // like an inbound frame (stored in the inbox so it can itself be
+          // replied to). Without this, mesh_reply returned "delivered" yet
+          // the sender never saw the response.
+          if (frame.id) this.inbox.set(frame.id, frame);
+          this.emit("inbound", frame);
+        }
         break;
       }
       case "presence":

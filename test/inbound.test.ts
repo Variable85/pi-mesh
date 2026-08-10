@@ -78,3 +78,25 @@ describe("formatInboundContent: remind frames carry the replyTo instruction", ()
     );
   });
 });
+
+describe("formatInboundContent: orphan replies (the cs-room fix)", () => {
+  it("reply frame is labelled as an answer to the original msgId", () => {
+    const f = buildFrame({
+      type: "reply",
+      from: "bob",
+      to: "alice",
+      room: "cs-room",
+      replyTo: "m_orig_12345678",
+      body: "MISSION COMPLETE",
+    });
+    const content = formatInboundContent(f);
+    assert.ok(
+      content.startsWith("[mesh] @bob (room cs-room, normal) reply to m_orig_12345678: MISSION COMPLETE"),
+      `got: ${content}`,
+    );
+    assert.ok(
+      content.includes(`answer back with the mesh_reply tool using msgId "${f.id}"`),
+      `got: ${content}`,
+    );
+  });
+});

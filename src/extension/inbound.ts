@@ -28,6 +28,14 @@ export function formatInboundContent(frame: MeshFrame): string {
       ` — reply with the mesh_reply tool using msgId "${replyTo}"`
     );
   }
+  if (frame.type === "reply") {
+    // Orphan reply (the original send did not awaitReply): make clear this
+    // is an ANSWER to an earlier message, not a new message.
+    return (
+      `${prefix} reply to ${frame.replyTo ?? "?"}: ${frame.body ?? ""}` +
+      `\n↩ answer back with the mesh_reply tool using msgId "${frame.id}"`
+    );
+  }
   return (
     `${prefix} ${frame.body ?? ""}` +
     `\n↩ reply with the mesh_reply tool using msgId "${frame.id}"`
