@@ -1,6 +1,6 @@
 {
   "name": "pi-mesh-extension",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Live agent-to-agent communication for Pi — local broker, mesh.v1 protocol, honest delivered/read/answered statuses, hash-only ledger. Zero runtime dependencies. Published as pi-mesh-extension on npm (the plain pi-mesh name is taken by another project).",
   "type": "module",
   "license": "MIT",
@@ -29,7 +29,9 @@
     "url": "https://github.com/cgarrot/pi-mesh/issues"
   },
   "pi": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   },
   "files": [
     "src",
@@ -44,7 +46,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test dist/test/*.test.js",
+    "test": "npm run build && node --test dist/test",
     "smoke": "node scripts/mesh-smoke.mjs",
     "prepublishOnly": "npm test"
   },

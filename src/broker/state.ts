@@ -1,6 +1,6 @@
 // broker/state.ts — in-memory tables only (D14 stateless, I2 presence = connections).
 import type { Socket } from "node:net";
-import type { MeshFrame, MeshRole } from "../protocol/envelope.js";
+import type { MeshFrame, MeshRole, FileReservation } from "../protocol/envelope.js";
 
 export interface PeerRecord {
   alias: string;
@@ -11,6 +11,8 @@ export interface PeerRecord {
   connectedAt: number; // ms
   lastSeenAt: number; // ms — updated on every received frame
   helloDone: boolean;
+  /** File reservations declared by the peer (D21). Live with the connection. */
+  reservations: FileReservation[];
 }
 
 export interface StoredMsg {

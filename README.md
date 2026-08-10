@@ -97,12 +97,23 @@ daemon management needed. Try `npm run smoke` for a full headless demo
 |---|---|---|
 | `mesh_send` | `to`, `message`, `room?`, `priority?`, `reason?`, `awaitReply?`, `timeoutMs?`, `refs?` | `delivered` / `queued_offline` / `reply: …` / `expired` / `blocked: …` |
 | `mesh_reply` | `msgId`, `message`, `refs?` | `delivered` or `blocked: reply_without_target` |
-| `mesh_status` | `room?` | live broker snapshot (peers, rooms) |
+| `mesh_status` | `room?` | live broker snapshot (peers, rooms, **reservations**) |
 | `mesh_history` | `limit?`, `withBodies?` | local **memory ring** (never the ledger) |
+| `mesh_reserve` | `paths`, `reason?` | reserve files/dirs — peers' `edit`/`write` get blocked on them |
+| `mesh_release` | `paths?` (omit = all) | release reservations, peers notified immediately |
 
 Priorities: `normal` → followUp · `urgent` → steer · `force` → controlled abort
-(when the recipient is busy) + steer. `force` requires `reason` (hashed into
-`reasonHash`, never persisted) and is governed by `policy.forceAllowedFrom`.
+(when the recipient is busy) + **delivery once the aborted turn settles**. `force`
+requires `reason` (hashed into `reasonHash`, never persisted) and is governed by
+`policy.forceAllowedFrom`.
+
+**File reservations**: claim paths before touching them — a trailing `/`
+reserves a whole subtree (`web/tools/`), anything else is exact. While a peer
+holds a reservation, other agents' `edit`/`write` tool calls on those paths are
+blocked with a message naming the holder + reason, and they are told to
+coordinate via `mesh_send`. Reservations **live with the connection** (like
+presence): a disconnected peer's reservations vanish automatically, and every
+change is broadcast to all peers in < 50 ms.
 
 Command: `/mesh status [room] · join <room> [observer] · leave <room> · alias ·
 log [on|off] · ping <alias> · broker · help`.
@@ -147,7 +158,15 @@ Env overrides: `MESH_ALIAS`, `MESH_ROOMS`, `MESH_RUNTIME_DIR`,
 `MESH_STATE_DIR`, `MESH_MAX_FRAME_BYTES`, `MESH_MAILBOX_CAP`,
 `MESH_MAILBOX_TTL_MS`, `MESH_TRANSCRIPT=1`, `MESH_POLICY`.
 
-## Invariants (I1–I10)
+## Platform notes
+
+- **Windows**: AF_UNIX sockets are unavailable on win32 (`listen` throws
+  `EACCES`), so the broker endpoint falls back to a **named pipe**
+  (`\\.\pipe\mesh-<hash>-broker`). Everything else is unchanged: the lock file
+  is still a regular file, `mesh doctor` shows the resolved endpoint, and the
+  full test suite + smoke pass on Windows.
+
+## Invariants (I1–I11)
 
 - **I1** no message body is ever persisted outside the opt-in transcript;
   the ledger is hash-only (`bodyStored:false`, fail-closed forbidden-key scan).
@@ -156,13 +175,16 @@ Env overrides: `MESH_ALIAS`, `MESH_ROOMS`, `MESH_RUNTIME_DIR`,
 - **I4** `delivered` = written on the recipient socket (or its mailbox) —
   **after** the broker ack, never before (C5). Never a completion.
 - **I5** replies exist only via explicit `mesh_reply` (strict `replyTo === msgId`).
-- **I6** the broker is stateless: kill it any time, clients re-`hello`.
+- **I6** the broker is stateless: kill it any time, clients re-`hello`
+  (reservations are re-declared in the hello frame).
 - **I7** zero loops: rate caps + anti-duplicate window + self-send block.
 - **I8** every bound is a named constant (frame 64 KiB, body 32 KiB, mailbox
   100/1 h, reminds ≤ 2, 16 rooms/peer, …).
 - **I9** `protocol/`, `broker/`, `client/` import nothing from Pi; the
   extension is a thin adapter with local `pi-types.ts`.
 - **I10** broker down → tools answer `blocked{broker_unavailable}`, never crash.
+- **I11** file reservations live with the connection: declared at `hello`,
+  broadcast on every change, gone when the peer disconnects (D21).
 
 ## Known limitations (v1)
 

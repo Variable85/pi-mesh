@@ -9,7 +9,7 @@ import {
   type MeshErrorCode,
   type MeshFrame,
 } from "../protocol/envelope.js";
-import { encodeFrame, FrameDecoder, FrameSizeError } from "../protocol/frames.js";
+import { encodeFrame, FrameDecoder, FrameSizeError, makeMsgId } from "../protocol/frames.js";
 import {
   DEFAULT_MAX_FRAME_BYTES,
   DEFAULT_ROOM,
@@ -137,6 +137,7 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
       connectedAt: Date.now(),
       lastSeenAt: Date.now(),
       helloDone: true,
+      reservations: frame.reservations ?? [],
     };
     state.peers.set(alias, peer);
     state.knownAliases.add(alias);
@@ -169,6 +170,8 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
     );
     for (const mf of mailboxFrames) sendTo(peer, mf); // §7.7: mailbox frames right after welcome
     announceOnline(state, peer, sendTo);
+    // D21: existing peers learn the newcomer's reservations (like presence)
+    if (peer.reservations.length > 0) broadcastReservations(state, peer, sendTo);
   };
 
   const routeMsg = (from: PeerRecord, frame: MeshFrame): void => {
@@ -294,6 +297,13 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
       case "msg":
         routeMsg(peer, frame);
         break;
+      case "reserve":
+        // D21: replace the peer's reservations, broadcast the new state to
+        // every other peer (like presence), then ack the sender.
+        peer.reservations = Array.isArray(frame.reservations) ? [...frame.reservations] : [];
+        broadcastReservations(state, peer, sendTo);
+        sendAck(peer, frame.id, "ok");
+        break;
       case "reply":
         routeOnlineOnly(peer, frame, false);
         break;
@@ -350,7 +360,24 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
     }
   };
 
-  const server = net.createServer((socket) => {
+  /** D21: broadcast one peer's full reservation state to every other peer. */
+function broadcastReservations(
+  state: BrokerState,
+  peer: PeerRecord,
+  sendTo: (peer: PeerRecord, frame: MeshFrame) => void,
+): void {
+  const frame = buildFrame({
+    type: "reserve",
+    from: peer.alias,
+    reservations: peer.reservations,
+  });
+  for (const p of state.peers.values()) {
+    if (p.alias === peer.alias) continue;
+    sendTo(p, frame);
+  }
+}
+
+const server = net.createServer((socket) => {
     socket.setNoDelay(true);
     const decoder = new FrameDecoder(config.maxFrameBytes);
     // handshake bound: hello ≤ 5 s (§6.1)
@@ -453,6 +480,18 @@ export function closePeer(
         writeFrame(p.socket, f, maxFrameBytes, () => {});
       },
     );
+  }
+  // D21: reservations live with the connection — the peer is gone, so
+  // notify the remaining peers that its reservations are void.
+  if (peer.reservations.length > 0) {
+    for (const p of state.peers.values()) {
+      writeFrame(
+        p.socket,
+        buildFrame({ type: "reserve", from: alias, reservations: [], id: makeMsgId() }),
+        maxFrameBytes,
+        () => {},
+      );
+    }
   }
 }
 

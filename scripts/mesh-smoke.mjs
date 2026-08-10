@@ -7,11 +7,16 @@ import { mkdtempSync, rmSync } from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const BROKER_ENTRY = path.join(ROOT, "dist", "src", "broker", "broker.js");
 const CLIENT_ENTRY = path.join(ROOT, "dist", "src", "client", "client.js");
+
+// Socket endpoint: same resolution as the runtime (named pipe on Windows).
+const { socketPathForDir } = await import(
+  pathToFileURL(path.join(ROOT, "dist", "src", "shared", "paths.js")).href,
+);
 
 const RE_READY_BUDGET_MS = 2000;
 const STEP_TIMEOUT_MS = 10000;
@@ -58,7 +63,7 @@ function probe(sockPath) {
 // Deterministic startup: wait until THIS broker listens before clients connect,
 // so clients never win the ensureBroker spawn race (SIGKILL target is unambiguous).
 async function waitBrokerUp() {
-  const sockPath = path.join(runtimeDir, "broker.sock");
+  const sockPath = socketPathForDir(runtimeDir);
   for (let i = 0; i < BROKER_BOOT_POLLS; i += 1) {
     if (await probe(sockPath)) return;
     await sleep(BROKER_BOOT_POLL_MS);
@@ -74,7 +79,7 @@ async function waitBrokerDown() {
   throw new Error("broker did not die");
 }
 
-const { MeshClient } = await import(CLIENT_ENTRY);
+const { MeshClient } = await import(pathToFileURL(CLIENT_ENTRY).href);
 
 let alice;
 let bob;

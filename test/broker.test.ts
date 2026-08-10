@@ -285,6 +285,7 @@ describe("broker: presence (E19)", () => {
       connectedAt: Date.now(),
       lastSeenAt: Date.now(),
       helloDone: true,
+      reservations: [],
     };
     const bob: PeerRecord = {
       alias: "bob",
@@ -293,6 +294,7 @@ describe("broker: presence (E19)", () => {
       connectedAt: Date.now(),
       lastSeenAt: Date.now(),
       helloDone: true,
+      reservations: [],
     };
     state.peers.set("alice", alice);
     state.peers.set("bob", bob);

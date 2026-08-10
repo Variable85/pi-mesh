@@ -1,7 +1,7 @@
 // extension/index.ts — Pi extension entrypoint (§9.1). Thin adapter: all logic
 // lives in client/; this file wires lifecycle, events, ledger and transcript.
 // I10: connect() is NON-blocking — tools answer `blocked` when the broker is down.
-import { MeshClient } from "../client/client.js";
+import { MeshClient, type WelcomeInfo } from "../client/client.js";
 import { loadConfig } from "../shared/config.js";
 import { runtimeDir, stateDir } from "../shared/paths.js";
 import { registerCommands } from "./commands.js";
@@ -10,6 +10,7 @@ import { MeshHud } from "./hud.js";
 import { injectInbound } from "./inbound.js";
 import { MeshLedger } from "./ledger.js";
 import type { ExtensionAPI } from "./pi-types.js";
+import { findConflict } from "./reservations.js";
 import { registerTools, type MeshRuntime } from "./tools.js";
 import { MeshTranscript } from "./transcript.js";
 import type { MeshFrame } from "../protocol/envelope.js";
@@ -131,12 +132,58 @@ export default function meshExtension(pi: ExtensionAPI): void {
       hud?.scheduleStatusRefresh(); // debounced ≤1/s trailing (hello floods)
     });
 
-    client.on("ready", () => {
+    client.on("ready", (welcome: WelcomeInfo) => {
       hud?.setConnecting(false);
       hud?.fetchStatus(); // fire-and-forget, never blocks session_start
+      // D21 identity: tell the agent who it is, once per connection, so it
+      // never has to guess its alias (the old file-based mesh had agents
+      // confusing each other's identities). display:false keeps it out of
+      // the UI; triggerTurn:false avoids an extra turn.
+      const roomList = (welcome.rooms.length > 0 ? welcome.rooms.join(",") : "default");
+      const peers = welcome.peers.map((p) => `@${p.alias}`).join(", ") || "(none)";
+      pi.sendMessage(
+        {
+          customType: "mesh-context",
+          content:
+            `[mesh] you are @${client.alias} (rooms: ${roomList}). ` +
+            `Online peers: ${peers}. ` +
+            `mesh_send/mesh_reply to talk, mesh_status for a live snapshot, ` +
+            `mesh_reserve to claim files before editing them.`,
+          display: false,
+        },
+        { triggerTurn: false },
+      );
     });
     client.on("closed", () => hud?.onClosed());
     client.on("expired", ({ msgId }) => hud?.noteExpired(msgId));
+
+    // D21 reservation enforcement: block edit/write on paths another agent
+    // has reserved. Runs FIRST (before any other tool handling); the block
+    // message tells the agent who holds the reservation and why.
+    pi.on("tool_call", (event, _ctx) => {
+      const rt = runtime;
+      if (rt === null) return;
+      if (!rt.client.isOnline()) return;
+      if (event.toolName !== "edit" && event.toolName !== "write") return;
+      const path = typeof event.input?.path === "string" ? event.input.path : undefined;
+      if (path === undefined || path === "") return;
+      const conflict = findConflict(path, rt.client.peerReservationMap, rt.client.alias);
+      if (conflict === undefined) return;
+      const holder = conflict.alias;
+      const res = conflict.reservation;
+      const lines = [
+        `${path}`,
+        `Reserved by: @${holder}`,
+      ];
+      if (res.reason !== undefined && res.reason !== "") lines.push(`Reason: "${res.reason}"`);
+      if (res.since !== undefined) lines.push(`Since: ${res.since}`);
+      lines.push("");
+      lines.push(
+        `Coordinate via mesh_send({ to: "${holder}", message: "..." }) — ` +
+          `or wait for mesh_release.`,
+      );
+      return { block: true, reason: lines.join("\n") };
+    });
 
     // HUD above the editor: attach after runtime creation, non-blocking.
     hud = new MeshHud({ getRuntime });

@@ -18,7 +18,7 @@ import {
   DEFAULT_MAX_FRAME_BYTES,
   type MeshConfig,
 } from "../src/shared/config.js";
-import { BROKER_SOCK_NAME } from "../src/shared/paths.js";
+import { socketPathForDir } from "../src/shared/paths.js";
 
 export interface TempDirs {
   root: string;
@@ -59,7 +59,7 @@ export async function startTestBroker(
   overrides: BrokerOverrides = {},
 ): Promise<RunningBroker> {
   mkdirSync(runtimeDir, { recursive: true });
-  const socketPath = path.join(runtimeDir, BROKER_SOCK_NAME);
+  const socketPath = socketPathForDir(runtimeDir);
   rmSync(socketPath, { force: true }); // stale socket from a previous broker
   const config: MeshConfig = { ...DEFAULT_CONFIG, ...overrides.config };
   const policy: MeshPolicy = {
@@ -71,7 +71,7 @@ export async function startTestBroker(
 }
 
 export function brokerSocketPathOf(runtimeDir: string): string {
-  return path.join(runtimeDir, BROKER_SOCK_NAME);
+  return socketPathForDir(runtimeDir);
 }
 
 /** Bounded poll — every test wait goes through here (suite stays < 60 s). */

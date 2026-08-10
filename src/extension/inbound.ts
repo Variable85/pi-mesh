@@ -52,10 +52,53 @@ export function mapPriority(priority: MeshPriority): DeliverAs {
   return priority === "normal" ? "followUp" : "steer";
 }
 
+/** Bound for the post-abort idle wait (force priority). */
+export const FORCE_IDLE_POLL_MS = 50;
+export const FORCE_IDLE_MAX_MS = 3_000;
+
+function buildInboundMessage(frame: MeshFrame): InboundMessage {
+  return {
+    customType: "mesh-inbound",
+    content: formatInboundContent(frame),
+    display: true,
+    details: inboundDetails(frame),
+  };
+}
+
+/**
+ * Deliver a message once the host reports idle, polling every `pollMs` up to
+ * `maxMs`. Used for force: after ctx.abort() the steer queue may be purged by
+ * the host (abort is not guaranteed to preserve queued messages), so we wait
+ * for the run to settle and then start a fresh turn with triggerTurn.
+ * Falls back to a plain steer send when the deadline passes.
+ */
+export function deliverWhenIdle(
+  pi: Pick<ExtensionAPI, "sendMessage">,
+  ctx: SessionContext,
+  frame: MeshFrame,
+  pollMs: number = FORCE_IDLE_POLL_MS,
+  maxMs: number = FORCE_IDLE_MAX_MS,
+): void {
+  const message = buildInboundMessage(frame);
+  const deadline = Date.now() + maxMs;
+  let sent = false;
+  const trySend = (): void => {
+    if (sent) return;
+    if ((typeof ctx.isIdle === "function" && ctx.isIdle()) || Date.now() >= deadline) {
+      sent = true;
+      pi.sendMessage(message, { triggerTurn: true, deliverAs: "steer" });
+      return;
+    }
+    const t = setTimeout(trySend, pollMs);
+    t.unref();
+  };
+  trySend();
+}
+
 /**
  * Inject one inbound msg/mailbox/remind frame into the Pi session.
  * force: controlled abort ONLY when the host exposes abort() AND reports busy
- * (ctx.isIdle() === false), then steer. Never throws (I10).
+ * (ctx.isIdle() === false), then deliver once idle. Never throws (I10).
  */
 export function injectInbound(
   pi: Pick<ExtensionAPI, "sendMessage">,
@@ -75,13 +118,12 @@ export function injectInbound(
   ) {
     ctx.abort();
     aborted = true;
+    // Defer the send until the aborted run settles: the host may purge its
+    // steer queue on abort, so queueing now risks losing the message (the
+    // exact bug that made 'force' unreliable during long tool calls).
+    deliverWhenIdle(pi, ctx, frame);
+    return { message: buildInboundMessage(frame), deliverAs: "steer", aborted };
   }
-  const message: InboundMessage = {
-    customType: "mesh-inbound",
-    content: formatInboundContent(frame),
-    display: true,
-    details: inboundDetails(frame),
-  };
-  pi.sendMessage(message, { triggerTurn: true, deliverAs });
-  return { message, deliverAs, aborted };
+  pi.sendMessage(buildInboundMessage(frame), { triggerTurn: true, deliverAs });
+  return { message: buildInboundMessage(frame), deliverAs, aborted };
 }

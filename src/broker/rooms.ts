@@ -1,5 +1,5 @@
 // broker/rooms.ts — membership, roles, presence broadcast (D6, §6.5).
-import { buildFrame, isValidRoom, type MeshErrorCode, type MeshRole } from "../protocol/envelope.js";
+import { buildFrame, isValidRoom, type FileReservation, type MeshErrorCode, type MeshRole } from "../protocol/envelope.js";
 import {
   DEFAULT_ROOM,
   MAX_PEERS_PER_ROOM,
@@ -107,8 +107,15 @@ export function peersSnapshot(state: BrokerState, roomId?: string): {
   rooms: string[];
   role?: MeshRole;
   since?: string;
+  reservations?: FileReservation[];
 }[] {
-  const out: { alias: string; rooms: string[]; role?: MeshRole; since?: string }[] = [];
+  const out: {
+    alias: string;
+    rooms: string[];
+    role?: MeshRole;
+    since?: string;
+    reservations?: FileReservation[];
+  }[] = [];
   for (const peer of state.peers.values()) {
     if (!peer.helloDone) continue;
     if (roomId !== undefined && !peer.rooms.has(roomId)) continue;
@@ -118,6 +125,7 @@ export function peersSnapshot(state: BrokerState, roomId?: string): {
       rooms,
       role: roomId !== undefined ? peer.rooms.get(roomId) : peer.rooms.get(DEFAULT_ROOM),
       since: new Date(peer.connectedAt).toISOString(),
+      reservations: peer.reservations.length > 0 ? [...peer.reservations] : undefined,
     });
   }
   return out;

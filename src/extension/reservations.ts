@@ -1,0 +1,40 @@
+// extension/reservations.ts — file reservation matching (D21).
+// Pure functions, no Pi imports (I9): pattern normalization + conflict lookup
+// against a peer→reservations map. Mirrors the old pi-mesh semantics: a
+// trailing "/" reserves a whole directory subtree, anything else is exact.
+import type { FileReservation } from "../protocol/envelope.js";
+
+/** Normalize a path/pattern for comparison: forward slashes, no "./", and
+ *  case-folded on Windows (NTFS is case-insensitive). */
+export function normalizePath(p: string): string {
+  let out = p.replace(/\\/g, "/").replace(/^\.\//, "");
+  if (process.platform === "win32") out = out.toLowerCase();
+  return out;
+}
+
+/** True when `filePath` falls under reservation `pattern`. */
+export function pathMatchesReservation(filePath: string, pattern: string): boolean {
+  const file = normalizePath(filePath);
+  const pat = normalizePath(pattern);
+  if (pat.endsWith("/")) {
+    return file.startsWith(pat) || file + "/" === pat;
+  }
+  return file === pat;
+}
+
+/** First conflicting reservation for `filePath`, or undefined. */
+export function findConflict(
+  filePath: string,
+  reservationsByPeer: ReadonlyMap<string, readonly FileReservation[]>,
+  selfAlias: string,
+): { alias: string; reservation: FileReservation } | undefined {
+  for (const [alias, reservations] of reservationsByPeer) {
+    if (alias === selfAlias) continue;
+    for (const reservation of reservations) {
+      if (pathMatchesReservation(filePath, reservation.pattern)) {
+        return { alias, reservation };
+      }
+    }
+  }
+  return undefined;
+}

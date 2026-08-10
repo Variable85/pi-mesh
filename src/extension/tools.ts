@@ -352,6 +352,83 @@ function execMeshHistory(
   );
 }
 
+// ---------------------------------------------------------------- mesh_reserve
+
+const MESH_RESERVE_PARAMETERS: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    paths: {
+      type: "array",
+      items: { type: "string" },
+      description:
+        "Paths to reserve. Use a trailing '/' for a directory subtree " +
+        "(e.g. 'web/tools/'). Relative paths are compared against edit/write " +
+        "paths as-is (backslashes tolerated).",
+    },
+    reason: { type: "string", description: "Why you're reserving these paths (visible to peers)." },
+  },
+  required: ["paths"],
+};
+
+async function execMeshReserve(
+  getRuntime: GetRuntime,
+  params: Record<string, unknown>,
+): Promise<ToolResult> {
+  const rt = getRuntime();
+  if (rt === null) return textResult("blocked: session_not_started", sendDetails({ status: "blocked", reason: "session_not_started" }));
+  const rawPaths = Array.isArray(params.paths)
+    ? params.paths.filter((p): p is string => typeof p === "string")
+    : [];
+  if (rawPaths.length === 0) {
+    return textResult("error: invalid_pattern (paths required)", sendDetails({ status: "error", reason: "invalid_pattern" }));
+  }
+  const reason = str(params.reason);
+  const res = await rt.client.reserve(rawPaths, reason);
+  if (res.status === "delivered") {
+    safeLedger(rt, { event: "reserved", id: res.msgId, from: rt.client.alias, refs: rawPaths, code: reason });
+    return textResult(`reserved ${rawPaths.length} path(s) — peers notified`, sendDetails({ status: "delivered", paths: rawPaths, reason }));
+  }
+  const resReason = "reason" in res ? res.reason : "error";
+  safeLedger(rt, { event: "blocked", from: rt.client.alias, refs: rawPaths, code: resReason });
+  return textResult(`blocked: ${resReason}`, sendDetails({ status: "blocked", reason: resReason }));
+}
+
+// ---------------------------------------------------------------- mesh_release
+
+const MESH_RELEASE_PARAMETERS: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    paths: {
+      type: "array",
+      items: { type: "string" },
+      description: "Specific patterns to release. Omit to release ALL reservations.",
+    },
+  },
+};
+
+async function execMeshRelease(
+  getRuntime: GetRuntime,
+  params: Record<string, unknown>,
+): Promise<ToolResult> {
+  const rt = getRuntime();
+  if (rt === null) return textResult("blocked: session_not_started", sendDetails({ status: "blocked", reason: "session_not_started" }));
+  const rawPaths = Array.isArray(params.paths)
+    ? params.paths.filter((p): p is string => typeof p === "string")
+    : undefined;
+  const res = await rt.client.release(rawPaths);
+  if (res.status === "delivered") {
+    safeLedger(rt, { event: "released", from: rt.client.alias, refs: res.released.length > 0 ? res.released : undefined });
+    return textResult(
+      res.released.length > 0
+        ? `released: ${res.released.join(", ")}`
+        : "no reservations to release",
+      sendDetails({ status: "delivered", released: res.released }),
+    );
+  }
+  const resReason = "reason" in res ? res.reason : "error";
+  return textResult(`blocked: ${resReason}`, sendDetails({ status: "blocked", reason: resReason }));
+}
+
 // ---------------------------------------------------------------- registration
 
 export function registerTools(pi: ExtensionAPI, getRuntime: GetRuntime): void {
@@ -406,6 +483,33 @@ export function registerTools(pi: ExtensionAPI, getRuntime: GetRuntime): void {
     parameters: MESH_HISTORY_PARAMETERS,
     execute: (_toolCallId, params, _signal, _onUpdate, _ctx) =>
       Promise.resolve(execMeshHistory(getRuntime, params)),
+  });
+
+  pi.registerTool({
+    name: "mesh_reserve",
+    label: "Mesh Reserve",
+    description:
+      "Reserve files/directories so other agents' edit/write tools get blocked " +
+      "on them. Trailing '/' reserves a subtree. Reservations live with the " +
+      "connection: they vanish when this session disconnects. Peers are " +
+      "notified immediately; use mesh_release when done.",
+    promptSnippet: "Claim files before editing to avoid concurrent edits.",
+    promptGuidelines:
+      "Reserve before editing a shared file, release when done. " +
+      "mesh_release({}) releases everything.",
+    parameters: MESH_RESERVE_PARAMETERS,
+    execute: (_toolCallId, params, _signal, _onUpdate, _ctx) => execMeshReserve(getRuntime, params),
+  });
+
+  pi.registerTool({
+    name: "mesh_release",
+    label: "Mesh Release",
+    description:
+      "Release reservations. Omit paths to release all. " +
+      "Peers are notified immediately.",
+    promptSnippet: "Release claimed files.",
+    parameters: MESH_RELEASE_PARAMETERS,
+    execute: (_toolCallId, params, _signal, _onUpdate, _ctx) => execMeshRelease(getRuntime, params),
   });
 }
 

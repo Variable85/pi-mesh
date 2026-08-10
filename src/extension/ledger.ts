@@ -19,7 +19,9 @@ export type LedgerEventName =
   | "expired"
   | "blocked"
   | "error"
-  | "inbound";
+  | "inbound"
+  | "reserved"
+  | "released";
 
 export interface LedgerRecord {
   schema: typeof LEDGER_SCHEMA;

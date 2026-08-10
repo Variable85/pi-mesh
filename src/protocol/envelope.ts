@@ -14,12 +14,21 @@ import { makeMsgId, nowIso, sha256 } from "./frames.js";
 export type MeshPriority = "normal" | "urgent" | "force";
 export type MeshRole = "member" | "observer";
 
+export interface FileReservation {
+  pattern: string;
+  reason?: string;
+  since?: string;
+}
+
 export interface MeshPeerInfo {
   alias: string;
   rooms: string[];
   role?: MeshRole;
   since?: string;
+  reservations?: FileReservation[];
 }
+
+
 
 export interface MeshFrame {
   v: 1;
@@ -43,6 +52,7 @@ export interface MeshFrame {
   mailboxCount?: number;
   queuedAt?: string; // mailbox frames (§7.7)
   interruptStatus?: string; // ack for force (§6.6)
+  reservations?: FileReservation[]; // hello/welcome/reserve/status_res (D21)
   ts: string;
 }
 
@@ -60,6 +70,7 @@ export const FRAME_TYPES = [
   "status_res",
   "join",
   "leave",
+  "reserve",
   "ping",
   "pong",
   "error",
@@ -134,6 +145,29 @@ export function isValidRoom(room: string): boolean {
   return ROOM_REGEX.test(room);
 }
 
+// ---- Reservations (D21) ----
+export const MAX_RESERVATION_PATTERN_CHARS = 512;
+export const MAX_RESERVATION_REASON_CHARS = 512;
+
+export function isValidReservationPattern(pattern: string): boolean {
+  return pattern.length > 0 && pattern.length <= MAX_RESERVATION_PATTERN_CHARS && !pattern.includes("\0");
+}
+
+/** Shape-check a reservations array; returns false on any malformed entry. */
+export function isValidReservations(value: unknown): value is FileReservation[] {
+  if (!Array.isArray(value)) return false;
+  for (const item of value) {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) return false;
+    const r = item as Record<string, unknown>;
+    if (typeof r.pattern !== "string" || !isValidReservationPattern(r.pattern)) return false;
+    if (r.reason !== undefined && (typeof r.reason !== "string" || r.reason.length > MAX_RESERVATION_REASON_CHARS)) {
+      return false;
+    }
+    if (r.since !== undefined && (typeof r.since !== "string" || Number.isNaN(Date.parse(r.since)))) return false;
+  }
+  return true;
+}
+
 /** Repo-relative refs only: reject "..", leading "/", "\", ".env" (§6.2 rule 7). */
 export function isValidRefPath(ref: string): boolean {
   if (ref.length === 0 || ref.length > MAX_REF_CHARS) return false;
@@ -166,6 +200,7 @@ export interface BuildFrameOpts {
   mailboxCount?: number;
   queuedAt?: string;
   interruptStatus?: string;
+  reservations?: FileReservation[];
 }
 
 /** Build a protocol-valid frame; bodyHash auto-computed when body present. */
@@ -196,6 +231,7 @@ export function buildFrame(opts: BuildFrameOpts): MeshFrame {
   if (opts.mailboxCount !== undefined) frame.mailboxCount = opts.mailboxCount;
   if (opts.queuedAt !== undefined) frame.queuedAt = opts.queuedAt;
   if (opts.interruptStatus !== undefined) frame.interruptStatus = opts.interruptStatus;
+  if (opts.reservations !== undefined) frame.reservations = [...opts.reservations];
   return frame;
 }
 
@@ -313,6 +349,11 @@ export function validateFrame(value: unknown, opts: ValidateOpts = {}): Validati
         return { ok: false, code: "invalid_frame", detail: "bad ref path" };
       }
     }
+  }
+
+  // Rule 8: reservations (hello/welcome/reserve/status_res) — shape-checked
+  if (value.reservations !== undefined && !isValidReservations(value.reservations)) {
+    return { ok: false, code: "invalid_frame", detail: "bad reservations" };
   }
 
   // error frames: closed code set

@@ -90,8 +90,26 @@ export type SessionHookHandler = (
   ctx: SessionContext,
 ) => void | Promise<void>;
 
+// ---- tool_call hook (reservation enforcement, D21) ----
+
+export interface ToolCallEvent {
+  toolName: string;
+  input: Record<string, unknown>;
+}
+
+export interface ToolCallEventResult {
+  block: boolean;
+  reason: string;
+}
+
+export type ToolCallHandler = (
+  event: ToolCallEvent,
+  ctx: SessionContext,
+) => ToolCallEventResult | undefined | void;
+
 /** The subset of the Pi ExtensionAPI used by the mesh extension (§9.1). */
 export interface ExtensionAPI {
+  on(event: "tool_call", handler: ToolCallHandler): void;
   on(event: SessionEventName, handler: SessionHookHandler): void;
   registerTool(tool: ToolDefinition): void;
   registerCommand(name: string, def: CommandDefinition): void;

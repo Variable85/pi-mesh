@@ -7,9 +7,11 @@ import {
   buildFrame,
   isValidAlias,
   isValidRefPath,
+  isValidReservationPattern,
   isValidRoom,
   normalizeAlias,
   parseFrameLine,
+  type FileReservation,
   type MeshFrame,
   type MeshPeerInfo,
   type MeshPriority,
@@ -117,6 +119,10 @@ export class MeshClient extends EventEmitter {
   private readonly pending: PendingReplies;
   /** Memory-only ring buffer of last frames (bodies included) for mesh_history (§8). */
   readonly transcript: MeshFrame[] = [];
+  /** Own file reservations (D21) — declared at hello, updated via reserve/release. */
+  private ownReservations: FileReservation[] = [];
+  /** Latest known reservations per peer, fed by welcome/reserve broadcasts. */
+  private readonly peerReservations = new Map<string, FileReservation[]>();
 
   constructor(opts: MeshClientOpts = {}) {
     super();
@@ -144,6 +150,41 @@ export class MeshClient extends EventEmitter {
    */
   peekInbox(msgId: string): MeshFrame | undefined {
     return this.inbox.get(msgId);
+  }
+
+  // ---- file reservations (D21) ----
+
+  /** This client's reservations (live, mutable by reserve/release). */
+  get reservations(): readonly FileReservation[] {
+    return this.ownReservations;
+  }
+
+  /** Known reservations of a peer alias (from welcome/status/reserve broadcasts). */
+  reservationsOf(alias: string): readonly FileReservation[] {
+    return this.peerReservations.get(alias) ?? [];
+  }
+
+  /** Snapshot of every peer alias currently holding reservations. */
+  get peerReservationAliases(): readonly string[] {
+    return [...this.peerReservations.keys()];
+  }
+
+  /** Live peer→reservations map (read-only view, includes self). */
+  get peerReservationMap(): ReadonlyMap<string, readonly FileReservation[]> {
+    return this.peerReservations;
+  }
+
+  private setOwnReservations(next: FileReservation[]): void {
+    this.ownReservations = next;
+    this.peerReservations.set(this.alias, next);
+  }
+
+  private applyPeerReservations(alias: string, reservations: FileReservation[] | undefined): void {
+    if (reservations !== undefined && reservations.length > 0) {
+      this.peerReservations.set(alias, [...reservations]);
+    } else {
+      this.peerReservations.delete(alias);
+    }
   }
 
   private ring(frame: MeshFrame): void {
@@ -195,6 +236,7 @@ export class MeshClient extends EventEmitter {
           type: "hello",
           from: this.alias,
           rooms: [...this.initialRooms],
+          reservations: this.ownReservations.length > 0 ? [...this.ownReservations] : undefined,
         });
         socket.write(encodeFrame(hello, this.config.maxFrameBytes));
       });
@@ -218,6 +260,8 @@ export class MeshClient extends EventEmitter {
               this.online = true;
               this.reconnectAttempt = 0;
               this.attachSocket(socket, decoder);
+              // D21: seed the peer reservation cache from the welcome snapshot
+              for (const p of frame.peers ?? []) this.applyPeerReservations(p.alias, p.reservations);
               resolve({
                 alias: this.alias,
                 rooms: frame.rooms ?? [...this.initialRooms],
@@ -310,6 +354,15 @@ export class MeshClient extends EventEmitter {
         if (frame.id) this.inbox.set(frame.id, frame);
         this.emit("inbound", frame);
         break;
+      case "reserve": {
+        // D21: full-state replacement broadcast (empty array = released)
+        const alias = frame.from;
+        if (alias !== undefined && alias !== this.alias) {
+          this.applyPeerReservations(alias, frame.reservations);
+          this.emit("reservations", { from: alias, reservations: frame.reservations ?? [] });
+        }
+        break;
+      }
       case "remind":
         this.emit("inbound", frame);
         break;
@@ -319,6 +372,7 @@ export class MeshClient extends EventEmitter {
         break;
       }
       case "presence":
+        if (frame.status === "offline") this.peerReservations.delete(frame.from ?? "");
         this.emit("presence", frame);
         break;
       case "pong":
@@ -533,6 +587,72 @@ export class MeshClient extends EventEmitter {
     });
     this.writeOrQueue(frame);
     this.ring(frame);
+  }
+
+  /**
+   * D21: (re)declare this client's file reservations (add or replace).
+   * The broker broadcasts the new full state to every peer. Patterns that are
+   * invalid or empty are rejected before the network round-trip.
+   */
+  async reserve(patterns: string[], reason?: string): Promise<SendResult> {
+    const valid: string[] = [];
+    for (const raw of patterns) {
+      const pattern = raw.trim();
+      if (pattern.length === 0 || !isValidReservationPattern(pattern)) {
+        return { status: "error", reason: `invalid_pattern: ${raw.slice(0, 80)}` };
+      }
+      valid.push(pattern);
+    }
+    if (valid.length === 0) return { status: "error", reason: "invalid_pattern" };
+    if (!this.online) {
+      try {
+        await this.connect();
+      } catch {
+        return { status: "blocked", reason: "broker_unavailable" };
+      }
+    }
+    const merged = [...this.ownReservations];
+    for (const pattern of valid) {
+      const idx = merged.findIndex((r) => r.pattern === pattern);
+      const entry: FileReservation = {
+        pattern,
+        reason: reason !== undefined && reason.trim() !== "" ? reason.trim().slice(0, 512) : undefined,
+        since: new Date().toISOString(),
+      };
+      if (idx !== -1) merged[idx] = entry;
+      else merged.push(entry);
+    }
+    const frame = buildFrame({ type: "reserve", from: this.alias, reservations: merged });
+    const ack = await this.roundTrip(frame);
+    if (ack.type === "error") return { status: "error", reason: ack.code ?? "internal" };
+    this.setOwnReservations(merged);
+    this.emit("reservations", { from: this.alias, reservations: merged });
+    return { status: "delivered", msgId: frame.id };
+  }
+
+  /**
+   * D21: release reservations. `patterns` undefined → release ALL.
+   * Returns the released patterns.
+   */
+  async release(patterns?: string[]): Promise<{ released: string[] } & SendResult> {
+    const releasing = patterns === undefined
+      ? this.ownReservations.map((r) => r.pattern)
+      : patterns.map((p) => p.trim()).filter((p) => p.length > 0);
+    if (releasing.length === 0) return { status: "delivered", msgId: "", released: [] };
+    const merged = this.ownReservations.filter((r) => !releasing.includes(r.pattern));
+    if (!this.online) {
+      try {
+        await this.connect();
+      } catch {
+        return { status: "blocked", reason: "broker_unavailable", released: [] };
+      }
+    }
+    const frame = buildFrame({ type: "reserve", from: this.alias, reservations: merged });
+    const ack = await this.roundTrip(frame);
+    if (ack.type === "error") return { status: "error", reason: ack.code ?? "internal", released: [] };
+    this.setOwnReservations(merged);
+    this.emit("reservations", { from: this.alias, reservations: merged });
+    return { status: "delivered", msgId: frame.id, released: releasing };
   }
 
   private waitAck(id: string): Promise<MeshFrame> {
