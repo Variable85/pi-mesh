@@ -46,9 +46,9 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test dist/test",
+    "test": "npm run build && node scripts/run-tests.mjs",
     "smoke": "node scripts/mesh-smoke.mjs",
-    "ci": "npm run build && node --test dist/test && npm run smoke",
+    "ci": "npm run build && node scripts/run-tests.mjs && npm run smoke",
     "prepublishOnly": "npm test"
   },
   "devDependencies": {
