@@ -31,7 +31,8 @@
   "pi": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/cgarrot/pi-mesh/main/assets/preview.jpg"
   },
   "files": [
     "src",
