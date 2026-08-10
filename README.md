@@ -106,6 +106,17 @@ daemon management needed. Try `npm run smoke` for a full headless demo
 | `mesh_reserve` | `paths`, `reason?` | reserve files/dirs — peers' `edit`/`write` get blocked on them |
 | `mesh_release` | `paths?` (omit = all) | release reservations, peers notified immediately |
 
+**Reply handling (D25)**: replies are deduped — only the FIRST answer to a
+given msgId reaches the session (via `awaitReply` or as an injected orphan);
+later duplicates (agents re-answering on reminds or after re-sends) are
+dropped silently, so the orchestrator never re-processes an answer it already
+handled. Replies are delivered with **steer** (they interrupt the current
+reflection) instead of queuing until the turn ends. `awaitReply` defaults to
+30 min (was 10) — long missions no longer "expire" while agents are still
+working — and an `expired` result explicitly says late replies are still
+delivered. Re-replying to the same msgId within 10 min returns a warning
+(`already_replied`) instead of silently duplicating.
+
 **Broadcast & reply variants (D24)**: `mesh_send` with `broadcast: true` fans
 a message out to every member of `room` (omitting `to`), and the honest ack
 reports `deliveredCount/totalCount`. `mesh_reply` keeps strict 1:1 correlation

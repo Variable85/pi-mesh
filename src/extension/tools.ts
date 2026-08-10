@@ -15,7 +15,7 @@ import {
   TRANSCRIPT_RING_SIZE,
 } from "../shared/config.js";
 import type { MeshGuards } from "./guards.js";
-import { LOOP_GUARD_WARNING } from "./guards.js";
+import { LOOP_GUARD_WARNING, REPLY_REPEAT_WARNING } from "./guards.js";
 import { identityFromClient, type MeshIdentity } from "./identity.js";
 import type { MeshLedger } from "./ledger.js";
 import type { ExtensionAPI, SessionContext, ToolResult } from "./pi-types.js";
@@ -71,7 +71,7 @@ function resultText(res: SendResult): string {
     case "reply":
       return `reply ${res.msgId}: ${res.response}`;
     case "expired":
-      return `expired ${res.msgId ?? ""}`;
+      return `expired ${res.msgId ?? ""} (late replies are still delivered and injected)`;
     case "blocked":
       return `blocked: ${res.reason}`;
     case "error":
@@ -292,6 +292,8 @@ async function execMeshReply(
     event: "sent", from: rt.client.alias, to: toRaw ?? orig.from, room: orig.room, priority: orig.priority, bodyHash, refs,
     code: replyAll ? "reply_all" : toRaw !== undefined ? "reply_to" : undefined,
   });
+  // D25: flag re-replies to the same msgId (warning only — never blocks)
+  const replyGuard = rt.guards.checkReply(msgId);
   const res = await rt.client.reply(msgId, message, { refs, to: toRaw, replyAll });
   if (res.status === "error" && res.reason === "reply_without_target") {
     // E9 defense in depth: inbox eviction between peek and reply.
@@ -316,22 +318,24 @@ async function execMeshReply(
       ? (replyAll ? `reply_all:${res.deliveredCount ?? 0}/${res.totalCount ?? 0}` : toRaw !== undefined ? "reply_to" : undefined)
       : ("reason" in res ? res.reason : "error"),
   });
-  return textResult(
-    resultText(res),
-    sendDetails({
-      status: res.status,
-      msgId: "msgId" in res ? res.msgId : msgId,
-      replyTo: msgId,
-      to: toRaw ?? orig?.from,
-      room: orig?.room,
-      priority: orig?.priority,
-      replyAll: replyAll || undefined,
-      deliveredCount: "deliveredCount" in res ? res.deliveredCount : undefined,
-      totalCount: "totalCount" in res ? res.totalCount : undefined,
-      bodyHash,
-      reason: "reason" in res ? res.reason : undefined,
-    }),
-  );
+  const details = sendDetails({
+    status: res.status,
+    msgId: "msgId" in res ? res.msgId : msgId,
+    replyTo: msgId,
+    to: toRaw ?? orig?.from,
+    room: orig?.room,
+    priority: orig?.priority,
+    replyAll: replyAll || undefined,
+    deliveredCount: "deliveredCount" in res ? res.deliveredCount : undefined,
+    totalCount: "totalCount" in res ? res.totalCount : undefined,
+    bodyHash,
+    reason: "reason" in res ? res.reason : undefined,
+  });
+  if (replyGuard.warnings.includes(REPLY_REPEAT_WARNING)) details.alreadyReplied = "matched";
+  const text = replyGuard.warnings.includes(REPLY_REPEAT_WARNING)
+    ? `${resultText(res)} — ⚠️ déjà répondu à ce msgId récemment (vérifie avant de re-répondre)`
+    : resultText(res);
+  return textResult(text, details);
 }
 
 // ---------------------------------------------------------------- mesh_status
@@ -501,7 +505,10 @@ export function registerTools(pi: ExtensionAPI, getRuntime: GetRuntime): void {
     promptGuidelines:
       "Use mesh_reply(msgId) to answer an inbound [mesh] message. " +
       "priority=force requires reason and aborts the recipient turn. " +
-      "delivered/queued_offline are NOT completions.",
+      "delivered/queued_offline are NOT completions. " +
+      "An 'expired' awaitReply is NOT a lost message: late replies are " +
+      "delivered and injected automatically — do not re-send the request, " +
+      "check mesh_history first.",
     parameters: MESH_SEND_PARAMETERS,
     execute: (_toolCallId, params, _signal, _onUpdate, _ctx) => execMeshSend(getRuntime, params),
   });
@@ -514,7 +521,10 @@ export function registerTools(pi: ExtensionAPI, getRuntime: GetRuntime): void {
       "This is the way to answer inbound [mesh] messages. " +
       "Refused with reply_without_target when the msgId is not in the local inbox.",
     promptSnippet: "Reply to a mesh message by msgId.",
-    promptGuidelines: "Only msgIds seen in inbound [mesh] messages are valid targets.",
+    promptGuidelines:
+      "Only msgIds seen in inbound [mesh] messages are valid targets. " +
+      "Replies interrupt the recipient (steer). If the result warns " +
+      "'déjà répondu', you already answered this msgId — do not re-answer.",
     parameters: MESH_REPLY_PARAMETERS,
     execute: (_toolCallId, params, _signal, _onUpdate, _ctx) => execMeshReply(getRuntime, params),
   });

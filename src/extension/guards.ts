@@ -17,6 +17,9 @@ import {
 export const DUPLICATE_WINDOW_MS = 10_000;
 export const LOOP_GUARD_KEYWORD = "mesh_send(";
 export const LOOP_GUARD_WARNING = "loopGuard:matched";
+/** D25: re-replying to the same msgId inside this window is flagged. */
+export const REPLY_REPEAT_WINDOW_MS = 600_000; // 10 min
+export const REPLY_REPEAT_WARNING = "already_replied";
 
 export interface GuardRateLimits {
   msgPerMin: number;
@@ -53,11 +56,34 @@ export class MeshGuards {
   /** (to|room|bodyHash) → last send ts (anti-duplicate window). */
   private readonly recent = new Map<string, number>();
   private readonly windows = new Map<string, SlidingWindow>();
+  /** msgId → last reply ts (D25: flag re-replies, never block). */
+  private readonly repliedTo = new Map<string, number>();
 
   constructor(
     private readonly limits: GuardRateLimits = DEFAULT_GUARD_LIMITS,
     private readonly now: () => number = Date.now,
   ) {}
+
+  /**
+   * D25: track that we replied to a msgId. Returns a WARNING when the same
+   * msgId was answered inside REPLY_REPEAT_WINDOW_MS — agents re-answer on
+   * reminds and after orchestrator re-sends; the warning (never a block)
+   * makes them think before answering twice.
+   */
+  checkReply(msgId: string, now: number = Date.now()): { warnings: string[] } {
+    const warnings: string[] = [];
+    const last = this.repliedTo.get(msgId);
+    if (last !== undefined && now - last < REPLY_REPEAT_WINDOW_MS) {
+      warnings.push(REPLY_REPEAT_WARNING);
+    }
+    this.repliedTo.set(msgId, now);
+    if (this.repliedTo.size > 512) {
+      for (const [id, ts] of this.repliedTo) {
+        if (now - ts >= REPLY_REPEAT_WINDOW_MS) this.repliedTo.delete(id);
+      }
+    }
+    return { warnings };
+  }
 
   checkSend(input: GuardInput): GuardResult {
     const warnings: string[] = [];

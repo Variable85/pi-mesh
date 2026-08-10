@@ -26,7 +26,8 @@ export function formatInboundContent(frame: MeshFrame): string {
     const replyTo = frame.replyTo ?? frame.id;
     return (
       `${prefix} reminder: reply due for ${replyTo}` +
-      ` — reply with the mesh_reply tool using msgId "${replyTo}"`
+      ` — reply with the mesh_reply tool using msgId "${replyTo}" ` +
+      `(IGNORE ce rappel si tu as DÉJÀ répondu à ce msgId)`
     );
   }
   if (frame.type === "reply") {
@@ -65,6 +66,16 @@ export function inboundDetails(frame: MeshFrame): Record<string, unknown> {
 /** Map priority → delivery mode (§6.6/§9.1). */
 export function mapPriority(priority: MeshPriority): DeliverAs {
   return priority === "normal" ? "followUp" : "steer";
+}
+
+/**
+ * D25: a reply is an ANSWER to something the session is waiting for — it
+ * must interrupt the current reflection (steer) instead of queuing until the
+ * turn ends (followUp), otherwise the agent keeps working on stale context
+ * and re-processes the answer later.
+ */
+export function mapReplyDelivery(frame: MeshFrame): DeliverAs {
+  return frame.type === "reply" ? "steer" : mapPriority(frame.priority ?? "normal");
 }
 
 /** Bound for the post-abort idle wait (force priority). */
@@ -121,7 +132,7 @@ export function injectInbound(
   frame: MeshFrame,
 ): InjectedInbound {
   const priority: MeshPriority = frame.priority ?? "normal";
-  const deliverAs = frame.type === "remind" ? "followUp" : mapPriority(priority);
+  const deliverAs = frame.type === "remind" ? "followUp" : mapReplyDelivery(frame);
   let aborted = false;
   if (
     priority === "force" &&

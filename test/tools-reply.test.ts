@@ -41,7 +41,7 @@ function makeRuntime(stateDir: string, stub: StubClient): { rt: MeshRuntime; led
     },
     ledger,
     transcript: { isEnabled: () => false, record: () => {} },
-    guards: {},
+    guards: { checkReply: () => ({ warnings: [] }) } as never,
     ctx: null,
     stateDir,
     runtimeDir: stateDir,

@@ -111,6 +111,9 @@ const BLOCKED_CODES = new Set([
 const ALIAS_RETRY_ATTEMPTS = 4;
 const ALIAS_RETRY_DELAY_MS = 250;
 
+/** D25: a reply target stays "handled" for 30 min (duplicates dropped). */
+const HANDLED_REPLY_WINDOW_MS = 1_800_000;
+
 function sleepMs(ms: number): Promise<void> {
   return new Promise((resolve) => {
     const t = setTimeout(resolve, ms);
@@ -154,6 +157,14 @@ export class MeshClient extends EventEmitter {
   private ownReservations: FileReservation[] = [];
   /** Latest known reservations per peer, fed by welcome/reserve broadcasts. */
   private readonly peerReservations = new Map<string, FileReservation[]>();
+  /**
+   * replyTo msgIds already answered/handled (D25): the FIRST reply to a given
+   * message is consumed (pending match) or injected (orphan); any later reply
+   * to the SAME msgId is a duplicate (agents re-answering on reminds) and is
+   * silently dropped — otherwise the orchestrator re-processes the same
+   * answer after already having handled it via awaitReply.
+   */
+  private readonly handledReplyTargets = new Map<string, number>();
 
   constructor(opts: MeshClientOpts = {}) {
     super();
@@ -236,6 +247,28 @@ export class MeshClient extends EventEmitter {
     if (this.transcript.length > TRANSCRIPT_RING_SIZE) {
       this.transcript.splice(0, this.transcript.length - TRANSCRIPT_RING_SIZE);
     }
+  }
+
+  /** replies to the same msgId are deduped for this long (D25). */
+  private pruneHandledReplyTargets(now: number = Date.now()): void {
+    for (const [id, ts] of this.handledReplyTargets) {
+      if (now - ts > HANDLED_REPLY_WINDOW_MS) this.handledReplyTargets.delete(id);
+    }
+  }
+
+  /** True if a reply for this target was already consumed (duplicate). */
+  private isDuplicateReply(replyTo: string, now: number = Date.now()): boolean {
+    const ts = this.handledReplyTargets.get(replyTo);
+    if (ts !== undefined && now - ts < HANDLED_REPLY_WINDOW_MS) return true;
+    this.handledReplyTargets.set(replyTo, now);
+    this.pruneHandledReplyTargets(now);
+    return false;
+  }
+
+  /** Mark a reply target as consumed (after pending match or orphan inject). */
+  private markReplyHandled(replyTo: string, now: number = Date.now()): void {
+    this.handledReplyTargets.set(replyTo, now);
+    this.pruneHandledReplyTargets(now);
   }
 
   // ---- connection lifecycle ----
@@ -450,16 +483,24 @@ export class MeshClient extends EventEmitter {
         this.emit("inbound", frame);
         break;
       case "reply": {
-        const matched = this.pending.handleReply(frame);
+        const replyTo = frame.replyTo;
+        const matched = replyTo !== undefined ? this.pending.handleReply(frame) : false;
         if (matched) {
           // awaited reply — the send() promise already carries the answer
+          if (replyTo !== undefined) this.markReplyHandled(replyTo);
           this.emit("reply", frame);
+        } else if (replyTo !== undefined && this.isDuplicateReply(replyTo)) {
+          // D25: a later reply to the same msgId — the first one was already
+          // consumed (awaitReply) or injected (orphan). Drop it silently:
+          // re-injecting would make the session re-process a handled answer.
+          this.pending.unmatchedReplyCount += 1;
         } else {
           // ORPHAN reply: the sender did not awaitReply, so no pending
           // exists — but the answer must still reach the session. Surface it
           // like an inbound frame (stored in the inbox so it can itself be
           // replied to). Without this, mesh_reply returned "delivered" yet
           // the sender never saw the response.
+          if (replyTo !== undefined) this.markReplyHandled(replyTo);
           if (frame.id) this.inbox.set(frame.id, frame);
           this.emit("inbound", frame);
         }

@@ -43,7 +43,9 @@ export const RECONNECT_MAX_MS = 5_000;
 export const OUTBOX_FLUSH_CAP = 50;
 
 // ---- awaitReply (§8) ----
-export const DEFAULT_AWAIT_REPLY_TIMEOUT_MS = 600_000; // 10 min
+export const DEFAULT_AWAIT_REPLY_TIMEOUT_MS = 1_800_000; // 30 min — missions run long;
+// a short default (was 10 min) made orchestration "expire" while agents were
+// still working, which triggered re-sends and duplicate replies.
 export const MIN_AWAIT_REPLY_TIMEOUT_MS = 25;
 export const MAX_AWAIT_REPLY_TIMEOUT_MS = 1_800_000; // 30 min
 export const MAX_REMINDS = 2; // D8

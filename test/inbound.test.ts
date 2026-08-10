@@ -62,7 +62,8 @@ describe("formatInboundContent: remind frames carry the replyTo instruction", ()
     assert.equal(
       content,
       '[mesh] @broker (room default, normal) reminder: reply due for msg-123' +
-        ' — reply with the mesh_reply tool using msgId "msg-123"',
+        ' — reply with the mesh_reply tool using msgId "msg-123" ' +
+        '(IGNORE ce rappel si tu as DÉJÀ répondu à ce msgId)',
     );
   });
 
