@@ -56,16 +56,16 @@ describe("reply dedup (D25)", () => {
     const injected = await withTimeout(firstP, 5000, "first orphan inject");
     assert.equal(injected.body, "answer #1");
 
-    // bob re-answers the SAME msgId (remind-driven re-send pattern) →
+    // bob re-sends the EXACT SAME answer (remind-driven re-send pattern) →
     // must be dropped silently: no second inbound event on lead
     let secondInjected = false;
     lead.on("inbound", (f: MeshFrame) => {
       if (f.type === "reply") secondInjected = true;
     });
-    const r2 = await bob.reply(msg.id, "answer #2 (duplicate)");
+    const r2 = await bob.reply(msg.id, "answer #1"); // identical body
     assert.equal(r2.status, "delivered"); // delivered on the wire…
     await new Promise((r) => setTimeout(r, 300)); // …but not re-injected
-    assert.equal(secondInjected, false, "duplicate reply must not reach the session again");
+    assert.equal(secondInjected, false, "identical re-send must not reach the session again");
   });
 
   it("awaitReply consumes the first reply; a late duplicate is dropped, not re-injected", async () => {
@@ -84,15 +84,15 @@ describe("reply dedup (D25)", () => {
     assert.equal(awaited.response, "the answer");
     await replyDone;
 
-    // late duplicate (after the pending was consumed) → dropped
+    // late re-send of the SAME answer (after the pending was consumed) → dropped
     let injected = false;
     lead.on("inbound", (f: MeshFrame) => {
       if (f.type === "reply") injected = true;
     });
-    const dup = await bob.reply(msg.id, "duplicate late");
+    const dup = await bob.reply(msg.id, "the answer"); // identical body
     assert.equal(dup.status, "delivered");
     await new Promise((r) => setTimeout(r, 300));
-    assert.equal(injected, false, "late duplicate must not be re-injected");
+    assert.equal(injected, false, "identical late re-send must not be re-injected");
   });
 
   it("a reply to a DIFFERENT msgId is still injected (no over-dedup)", async () => {
@@ -131,5 +131,41 @@ describe("reply delivery mode (D25)", () => {
     };
     const content = formatInboundContent(f as unknown as MeshFrame);
     assert.ok(content.includes("IGNORE ce rappel si tu as DÉJÀ répondu"), content);
+  });
+});
+
+describe("reply dedup by content (D25 v2)", () => {
+  it("a DIFFERENT answer to the same msgId is delivered (ack → final report)", async () => {
+    const dirs = makeTempDirs("mesh-dedup2-");
+    const broker = await startTestBroker(dirs.runtimeDir);
+    const lead = new MeshClient({ alias: "lead", runtimeDir: dirs.runtimeDir });
+    const bob = new MeshClient({ alias: "bob", runtimeDir: dirs.runtimeDir });
+    await Promise.all([lead.connect(), bob.connect()]);
+    try {
+      const msgP = new Promise<MeshFrame>((resolve) => {
+        bob.once("inbound", (f: MeshFrame) => resolve(f));
+      });
+      await lead.send({ to: "bob", message: "RE V1-NOIR" });
+      const msg = await withTimeout(msgP, 5000, "bob inbound");
+
+      const got: string[] = [];
+      lead.on("inbound", (f: MeshFrame) => {
+        if (f.type === "reply") got.push(f.body ?? "");
+      });
+      // ack first
+      await bob.reply(msg.id, "RE V1-NOIR reçue — chasse aux valeurs");
+      // then the final report — SAME msgId, DIFFERENT body → must be delivered
+      await bob.reply(msg.id, "RE V1-NOIR TERMINÉE — rapport web/tools/re_v1_black.md");
+      await new Promise((r) => setTimeout(r, 300));
+      assert.deepEqual(got, [
+        "RE V1-NOIR reçue — chasse aux valeurs",
+        "RE V1-NOIR TERMINÉE — rapport web/tools/re_v1_black.md",
+      ]);
+    } finally {
+      await lead.close().catch(() => {});
+      await bob.close().catch(() => {});
+      await broker.close();
+      rmSync(dirs.root, { recursive: true, force: true });
+    }
   });
 });

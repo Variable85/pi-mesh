@@ -159,10 +159,11 @@ export class MeshClient extends EventEmitter {
   private readonly peerReservations = new Map<string, FileReservation[]>();
   /**
    * replyTo msgIds already answered/handled (D25): the FIRST reply to a given
-   * message is consumed (pending match) or injected (orphan); any later reply
-   * to the SAME msgId is a duplicate (agents re-answering on reminds) and is
-   * silently dropped — otherwise the orchestrator re-processes the same
-   * answer after already having handled it via awaitReply.
+   * message is consumed (pending match) or injected (orphan); later replies
+   * are deduped by (replyTo + body hash) — an EXACT re-send of an already
+   * handled answer is dropped silently (agents re-answering on reminds), but
+   * a DIFFERENT answer to the same msgId (e.g. an ack "reçue" then the final
+   * report) is still delivered.
    */
   private readonly handledReplyTargets = new Map<string, number>();
 
@@ -243,6 +244,11 @@ export class MeshClient extends EventEmitter {
   }
 
   private ring(frame: MeshFrame): void {
+    // D26: keep the ring USEFUL — heartbeats/acks (ping/pong/ack) flood it
+    // (4 pongs/min) and push real messages (msg/reply/reserve/…) out in
+    // minutes, so mesh_history only showed pongs. Only frames the session
+    // cares about are kept.
+    if (frame.type === "ping" || frame.type === "pong" || frame.type === "ack") return;
     this.transcript.push(frame);
     if (this.transcript.length > TRANSCRIPT_RING_SIZE) {
       this.transcript.splice(0, this.transcript.length - TRANSCRIPT_RING_SIZE);
@@ -256,18 +262,22 @@ export class MeshClient extends EventEmitter {
     }
   }
 
-  /** True if a reply for this target was already consumed (duplicate). */
-  private isDuplicateReply(replyTo: string, now: number = Date.now()): boolean {
-    const ts = this.handledReplyTargets.get(replyTo);
+  /**
+   * True when this EXACT answer (replyTo + body) was already consumed.
+   * Marks the key on first sight so re-sends are dropped.
+   */
+  private isDuplicateReply(replyTo: string, body: string, now: number = Date.now()): boolean {
+    const key = `${replyTo}|${sha256(body)}`;
+    const ts = this.handledReplyTargets.get(key);
     if (ts !== undefined && now - ts < HANDLED_REPLY_WINDOW_MS) return true;
-    this.handledReplyTargets.set(replyTo, now);
+    this.handledReplyTargets.set(key, now);
     this.pruneHandledReplyTargets(now);
     return false;
   }
 
   /** Mark a reply target as consumed (after pending match or orphan inject). */
-  private markReplyHandled(replyTo: string, now: number = Date.now()): void {
-    this.handledReplyTargets.set(replyTo, now);
+  private markReplyHandled(replyTo: string, body: string, now: number = Date.now()): void {
+    this.handledReplyTargets.set(`${replyTo}|${sha256(body)}`, now);
     this.pruneHandledReplyTargets(now);
   }
 
@@ -484,15 +494,17 @@ export class MeshClient extends EventEmitter {
         break;
       case "reply": {
         const replyTo = frame.replyTo;
+        const body = frame.body ?? "";
         const matched = replyTo !== undefined ? this.pending.handleReply(frame) : false;
         if (matched) {
           // awaited reply — the send() promise already carries the answer
-          if (replyTo !== undefined) this.markReplyHandled(replyTo);
+          if (replyTo !== undefined) this.markReplyHandled(replyTo, body);
           this.emit("reply", frame);
-        } else if (replyTo !== undefined && this.isDuplicateReply(replyTo)) {
-          // D25: a later reply to the same msgId — the first one was already
-          // consumed (awaitReply) or injected (orphan). Drop it silently:
-          // re-injecting would make the session re-process a handled answer.
+        } else if (replyTo !== undefined && this.isDuplicateReply(replyTo, body)) {
+          // D25: this EXACT answer (same msgId + same body) was already
+          // consumed (awaitReply) or injected (orphan) — a re-send on a
+          // remind. Drop it silently. Different answers to the same msgId
+          // (ack then final report) are NOT duplicates and still pass.
           this.pending.unmatchedReplyCount += 1;
         } else {
           // ORPHAN reply: the sender did not awaitReply, so no pending
@@ -500,7 +512,7 @@ export class MeshClient extends EventEmitter {
           // like an inbound frame (stored in the inbox so it can itself be
           // replied to). Without this, mesh_reply returned "delivered" yet
           // the sender never saw the response.
-          if (replyTo !== undefined) this.markReplyHandled(replyTo);
+          if (replyTo !== undefined) this.markReplyHandled(replyTo, body);
           if (frame.id) this.inbox.set(frame.id, frame);
           this.emit("inbound", frame);
         }
