@@ -452,8 +452,15 @@ export class MeshClient extends EventEmitter {
     const to = normalizeAlias(opts.to);
     if (!isValidAlias(to)) return { status: "error", reason: "invalid_alias" };
     if (to === this.alias) return { status: "blocked", reason: "self_send" };
-    const room = opts.room ?? DEFAULT_ROOM;
-    if (!isValidRoom(room)) return { status: "error", reason: "invalid_room" };
+    // Room resolution: explicit room wins; otherwise prefer "default" when
+    // still joined, else the first joined room (the client may have left
+    // "default" — sending into it would be refused as not_member).
+    const room = opts.room ?? (this.joinedRooms.has(DEFAULT_ROOM)
+      ? DEFAULT_ROOM
+      : [...this.joinedRooms][0]);
+    if (room === undefined || !isValidRoom(room)) {
+      return { status: "error", reason: "not_in_any_room" };
+    }
     if (Buffer.byteLength(opts.message, "utf8") > MAX_BODY_BYTES) {
       return { status: "error", reason: "invalid_frame: body too large" }; // E10
     }

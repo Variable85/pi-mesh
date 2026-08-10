@@ -201,6 +201,8 @@ Env overrides: `MESH_ALIAS`, `MESH_ROOMS`, `MESH_RUNTIME_DIR`,
   Senders always get the honest `queued_offline` status.
 - **Loopback only**: unix socket (named pipe on Windows) on one machine,
   no network, no auth/encryption.
+- **Rooms are per-connection**: a peer in zero rooms cannot send/receive
+  room messages until it joins one again (`/mesh join <room>`).
 - No room broadcast: messages are strictly **unicast** (`to=<alias>` required).
   A room carries presence + authorization only (roles `member`/`observer`,
   `policy`) — sending "into a room" only touches the explicit recipient.

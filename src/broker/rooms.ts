@@ -36,10 +36,15 @@ export function joinRoom(
   return { ok: true };
 }
 
-/** Leave a room; leaving the last room is refused (§6.5, E17). */
+/**
+ * Leave a room. A peer MAY end up in zero rooms (it simply cannot send or
+ * receive room messages until it joins one again). Previously the last room
+ * was refused (E17) — that made "default" un-leavable, and since the hello
+ * re-auto-joined it, "default" kept coming back after /mesh leave default.
+ */
 export function leaveRoom(state: BrokerState, peer: PeerRecord, roomId: string): RoomResult {
   if (!peer.rooms.has(roomId)) return { ok: false, code: "not_member" };
-  if (peer.rooms.size <= 1) return { ok: false, code: "last_room" };
+  peer.rooms.delete(roomId);
   peer.rooms.delete(roomId);
   const members = state.rooms.get(roomId);
   if (members) {

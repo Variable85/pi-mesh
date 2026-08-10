@@ -142,8 +142,14 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
     state.peers.set(alias, peer);
     state.knownAliases.add(alias);
 
-    // default room auto-joined (D6), then requested rooms (union, deduped)
-    const requested = new Set<string>([DEFAULT_ROOM, ...(frame.rooms ?? [])]);
+    // D21: rooms — the hello carries the client's EXACT room list. When the
+    // field is present (even empty), it is authoritative: a client that
+    // left "default" must NOT be re-joined to it on every reconnect (that
+    // was the bug: "default" kept coming back after /mesh leave default).
+    // Only a legacy hello without a rooms field gets the default room.
+    const requested = frame.rooms !== undefined
+      ? new Set<string>(frame.rooms)
+      : new Set<string>([DEFAULT_ROOM]);
     for (const roomId of requested) {
       const role = frame.role ?? "member";
       const res = joinRoom(state, config, peer, roomId, role);

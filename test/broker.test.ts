@@ -113,14 +113,18 @@ describe("broker: routing refusals", () => {
     assert.equal(e.code, "observer_readonly");
   });
 
-  it("E17: leaving the last room → last_room", async (t) => {
+  it("leaving the last room is allowed (0 rooms — peer is roomless)", async (t) => {
     const { sock } = await withBroker(t);
     const alice = trackRaw(t, await RawClient.connect(sock));
     alice.hello("alice");
     await alice.waitFrame((f) => f.type === "welcome");
     alice.send({ type: "leave", from: "alice", room: "default" });
+    const ack = await alice.waitFrame((f) => f.type === "ack");
+    assert.equal(ack.status, "ok");
+    // roomless peer can no longer send into default
+    alice.send({ type: "msg", from: "alice", to: "bob", body: "hi" });
     const e = await alice.waitFrame((f) => f.type === "error");
-    assert.equal(e.code, "last_room");
+    assert.equal(e.code, "not_member");
   });
 
   it("E18: msg on a room the sender does not share → not_member", async (t) => {

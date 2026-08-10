@@ -100,4 +100,33 @@ describe("client: in-flight alias rename", () => {
     const self = snap.peers.find((p) => p.alias === "alice5");
     assert.ok(!self?.rooms.includes("ghost"));
   });
+
+  it("left 'default' does NOT come back after a re-hello (rename)", async () => {
+    // The bug: the broker auto-joined every peer to "default" at hello, so
+    // /mesh leave default was undone by the next reconnect/rename.
+    await alice.join("ops");
+    await alice.leave("default");
+    const before = await alice.status();
+    let self = before.peers.find((p) => p.alias === "alice5");
+    assert.ok(!self?.rooms.includes("default"));
+
+    // re-hello (rename) — the exact moment "default" used to come back
+    const res = await alice.rename("alice6");
+    assert.equal(res.ok, true);
+    const after = await alice.status();
+    self = after.peers.find((p) => p.alias === "alice6");
+    assert.ok(self !== undefined, "renamed peer visible");
+    assert.ok(!self.rooms.includes("default"), "default must not come back");
+    assert.ok(self.rooms.includes("ops"));
+  });
+
+  it("send falls back to a joined room when 'default' was left", async () => {
+    await alice.leave("ops");
+    await alice.join("work");
+    // bob joins work too so the message can be routed
+    await bob.join("work");
+    const res = await alice.send({ to: "bob", message: "via work" });
+    assert.equal(res.status, "delivered");
+    await bob.leave("work");
+  });
 });
