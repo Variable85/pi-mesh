@@ -93,6 +93,17 @@ const BLOCKED_CODES = new Set([
   "force_requires_reason",
 ]);
 
+/** alias_taken: retries of the original alias before falling back to random. */
+const ALIAS_RETRY_ATTEMPTS = 4;
+const ALIAS_RETRY_DELAY_MS = 250;
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const t = setTimeout(resolve, ms);
+    t.unref();
+  });
+}
+
 function defaultAlias(): string {
   return `agent-${randomBytes(ALIAS_RAND_CHARS / 2).toString("hex").slice(0, ALIAS_RAND_CHARS)}`;
 }
@@ -233,17 +244,26 @@ export class MeshClient extends EventEmitter {
   }
 
   /**
-   * doConnect, but on alias_taken (another live peer holds our alias — e.g.
-   * a crashed session that never cleanly disconnected) fall back to a fresh
+   * doConnect, but on alias_taken: first RETRY the original alias with a
+   * short backoff — the old connection may be mid-close (the /reload
+   * handover, where session_shutdown and session_start are back-to-back).
+   * Only after the retries fail (a genuinely live peer holds the alias,
+   * e.g. a crashed session that never disconnected) fall back to a fresh
    * random alias instead of looping forever. Emits `alias_fallback` so the
    * extension can notify the user and persist the new identity.
    */
   private async doConnectWithAliasFallback(): Promise<WelcomeInfo> {
-    try {
-      return await this.doConnect();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("alias_taken") && !this.aliasFallbackDone) {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.doConnect();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!msg.includes("alias_taken")) throw err;
+        if (attempt < ALIAS_RETRY_ATTEMPTS) {
+          await sleepMs(ALIAS_RETRY_DELAY_MS * 2 ** attempt);
+          continue;
+        }
+        if (this.aliasFallbackDone) throw err;
         this.aliasFallbackDone = true;
         const previous = this.aliasInternal;
         this.aliasInternal = defaultAlias();
@@ -256,7 +276,6 @@ export class MeshClient extends EventEmitter {
           throw err; // surface the original alias_taken
         }
       }
-      throw err;
     }
   }
 
