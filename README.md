@@ -33,9 +33,9 @@ project and use on any machine.
 **As a Pi package** (recommended — the extension auto-loads):
 
 ```bash
-pi install npm:pi-mesh
+pi install npm:pi-mesh-extension
 # or from git, pinned to a release tag
-pi install git:github.com/cgarrot/pi-mesh@v0.1.0
+pi install git:github.com/cgarrot/pi-mesh@v0.1.3
 ```
 
 **From source (clone and run):**
@@ -83,13 +83,15 @@ daemon management needed. Try `npm run smoke` for a full headless demo
 ## Releases & publishing
 
 - Versioning follows semver from `package.json` (`v0.1.0` = tag + npm version).
-- To publish a new release: `npm version patch|minor|major && git push --tags
-  && npm publish`. `prepublishOnly` runs the full build + test suite first.
+- The `Release` GitHub Action publishes to npm automatically on `v*` tags
+  (requires the `NPM_TOKEN` repository secret):
+  `npm version patch|minor|major && git push && git push --tags`.
+  `prepublishOnly` runs the full build + test suite before every publish.
 - The package is published as `pi-mesh-extension` on npmjs.org
   (`publishConfig.access` is public; the plain `pi-mesh` name is already taken
   on npm by another project) and is a Pi package (`pi` manifest +
   `pi-package` keyword), so `pi install npm:pi-mesh-extension` works on any
-  machine.
+  machine and the package appears in the pi.dev gallery automatically.
 
 ## Tools (Pi extension)
 
