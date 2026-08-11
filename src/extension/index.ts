@@ -7,6 +7,7 @@ import { runtimeDir, stateDir } from "../shared/paths.js";
 import { registerCommands } from "./commands.js";
 import { MeshGuards } from "./guards.js";
 import { MeshHud } from "./hud.js";
+import { attachClientListeners } from "./attach.js";
 import { injectInbound } from "./inbound.js";
 import { identityFromClient, MeshIdentity } from "./identity.js";
 import { MeshLedger } from "./ledger.js";
@@ -17,62 +18,6 @@ import { MeshTranscript } from "./transcript.js";
 import type { MeshFrame } from "../protocol/envelope.js";
 import type { SessionContext } from "./pi-types.js";
 
-/** B1: failure counters for the inbound path, surfaced via /mesh broker. */
-export interface InboundFailureCounters {
-  ledgerFailures: number;
-  transcriptFailures: number;
-  injectionFailures: number;
-}
-
-export interface InboundDeps {
-  ledger: Pick<MeshLedger, "append">;
-  transcript: Pick<MeshTranscript, "record">;
-  selfAlias: string;
-  counters: InboundFailureCounters;
-}
-
-/**
- * B1 fix: session injection is UNCONDITIONAL — it runs FIRST and a disk
- * failure (ENOSPC/EACCES/EROFS) in transcript/ledger can never suppress it
- * (the broker already acked delivered; I4 honest-status). Ledger/transcript
- * writes are isolated in their own try/catch and failures are COUNTED.
- * An injection failure itself is also caught + counted so one bad frame
- * cannot kill the handler loop.
- */
-export function handleInboundFrame(
-  pi: Pick<ExtensionAPI, "sendMessage">,
-  ctx: SessionContext | null,
-  frame: MeshFrame,
-  deps: InboundDeps,
-): void {
-  try {
-    injectInbound(pi, ctx, frame);
-  } catch {
-    deps.counters.injectionFailures += 1; // one bad frame must not kill the loop (I10)
-  }
-  try {
-    deps.transcript.record("in", frame);
-  } catch {
-    deps.counters.transcriptFailures += 1;
-  }
-  if (frame.type === "msg" || frame.type === "mailbox" || frame.type === "remind" || frame.type === "reply") {
-    try {
-      deps.ledger.append({
-        event: "inbound",
-        id: frame.id,
-        from: frame.from,
-        to: deps.selfAlias,
-        room: frame.room,
-        priority: frame.priority ?? "normal",
-        bodyHash: frame.bodyHash,
-        refs: frame.refs,
-      });
-    } catch {
-      deps.counters.ledgerFailures += 1;
-    }
-  }
-}
-
 export default function meshExtension(pi: ExtensionAPI): void {
   let runtime: MeshRuntime | null = null;
   let hud: MeshHud | null = null;
@@ -80,12 +25,14 @@ export default function meshExtension(pi: ExtensionAPI): void {
 
   // Tools + command are registered IMMEDIATELY (they answer `blocked` offline).
   registerTools(pi, getRuntime);
-  registerCommands(pi, getRuntime, () => hud?.onLocalChange());
+  registerCommands(pi, getRuntime, () => hud?.onLocalChange(), () => hud);
 
   /** Persist the current client state as this session's identity (D23). */
   const saveIdentity = (rt: MeshRuntime): void => {
     rt.identity.save(identityFromClient(rt.sessionId, rt.client));
   };
+  /** Live HUD accessor (the module-level `hud` variable is reassigned). */
+  const getHudRef = (): MeshHud | null => hud;
 
   pi.on("session_start", (_event, ctx) => {
     const sDir = stateDir(); // <cwd>/.mesh or $MESH_STATE_DIR (D19)
@@ -125,67 +72,7 @@ export default function meshExtension(pi: ExtensionAPI): void {
     };
     const rt = runtime;
 
-    client.on("inbound", (frame) => {
-      const rt = runtime;
-      if (rt === null) return; // session shutting down
-      handleInboundFrame(pi, rt.ctx, frame, {
-        ledger,
-        transcript,
-        selfAlias: client.alias,
-        counters: rt,
-      });
-      hud?.noteInbound(frame); // L2 preview: transient memory only, never persisted
-    });
-
-    // presence → appendEntry ONLY, no turn (§9.1)
-    client.on("presence", (frame) => {
-      pi.appendEntry("mesh", {
-        kind: "mesh-presence",
-        alias: frame.from,
-        status: frame.status,
-        room: frame.room,
-        ts: frame.ts,
-      });
-      hud?.scheduleStatusRefresh(); // debounced ≤1/s trailing (hello floods)
-    });
-
-    client.on("ready", (welcome: WelcomeInfo) => {
-      hud?.setConnecting(false);
-      hud?.fetchStatus(); // fire-and-forget, never blocks session_start
-      // D23: persist identity as soon as we are connected (covers the very
-      // first connect AND every reconnect/rename).
-      if (rt !== null) saveIdentity(rt);
-      // D21 identity: tell the agent who it is, once per connection, so it
-      // never has to guess its alias (the old file-based mesh had agents
-      // confusing each other's identities). display:false keeps it out of
-      // the UI; triggerTurn:false avoids an extra turn.
-      const roomList = (welcome.rooms.length > 0 ? welcome.rooms.join(",") : "default");
-      const peers = welcome.peers.map((p) => `@${p.alias}`).join(", ") || "(none)";
-      pi.sendMessage(
-        {
-          customType: "mesh-context",
-          content:
-            `[mesh] you are @${client.alias} (rooms: ${roomList}). ` +
-            `Online peers: ${peers}. ` +
-            `mesh_send/mesh_reply to talk, mesh_status for a live snapshot, ` +
-            `mesh_reserve to claim files before editing them.`,
-          display: false,
-        },
-        { triggerTurn: false },
-      );
-    });
-    client.on("renamed", () => {
-      if (rt !== null) saveIdentity(rt);
-    });
-    client.on("alias_fallback", ({ from, to }: { from: string; to: string }) => {
-      // Another live peer holds our persisted alias (e.g. crashed session) —
-      // we took a random one; persist it so the next reload does not fight
-      // for the same alias again.
-      if (rt !== null) saveIdentity(rt);
-      ctx.ui.notify(`mesh: alias @${from} taken — now connected as @${to}`, { level: "warning" });
-    });
-    client.on("closed", () => hud?.onClosed());
-    client.on("expired", ({ msgId }) => hud?.noteExpired(msgId));
+    attachClientListeners(pi, rt, getHudRef, ctx, client, saveIdentity);
 
     // D21 reservation enforcement: block edit/write on paths another agent
     // has reserved. Runs FIRST (before any other tool handling); the block

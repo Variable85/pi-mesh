@@ -153,3 +153,60 @@ export function injectInbound(
   pi.sendMessage(buildInboundMessage(frame), { triggerTurn: true, deliverAs });
   return { message: buildInboundMessage(frame), deliverAs, aborted };
 }
+
+// ---------------------------------------------------------------------------
+// Inbound dispatch (B1): session injection is UNCONDITIONAL — it runs FIRST
+// and a disk failure (ENOSPC/EACCES/EROFS) in transcript/ledger can never
+// suppress it (the broker already acked delivered; I4 honest-status).
+// Ledger/transcript writes are isolated in their own try/catch and failures
+// are COUNTED. An injection failure itself is also caught + counted so one
+// bad frame cannot kill the handler loop.
+// ---------------------------------------------------------------------------
+
+/** B1: failure counters for the inbound path, surfaced via /mesh broker. */
+export interface InboundFailureCounters {
+  ledgerFailures: number;
+  transcriptFailures: number;
+  injectionFailures: number;
+}
+
+export interface InboundDeps {
+  ledger: { append(input: unknown): unknown };
+  transcript: { record(dir: "in" | "out", frame: MeshFrame): void };
+  selfAlias: string;
+  counters: InboundFailureCounters;
+}
+
+export function handleInboundFrame(
+  pi: Pick<ExtensionAPI, "sendMessage">,
+  ctx: SessionContext | null,
+  frame: MeshFrame,
+  deps: InboundDeps,
+): void {
+  try {
+    injectInbound(pi, ctx, frame);
+  } catch {
+    deps.counters.injectionFailures += 1; // one bad frame must not kill the loop (I10)
+  }
+  try {
+    deps.transcript.record("in", frame);
+  } catch {
+    deps.counters.transcriptFailures += 1;
+  }
+  if (frame.type === "msg" || frame.type === "mailbox" || frame.type === "remind" || frame.type === "reply") {
+    try {
+      deps.ledger.append({
+        event: "inbound",
+        id: frame.id,
+        from: frame.from,
+        to: deps.selfAlias,
+        room: frame.room,
+        priority: frame.priority ?? "normal",
+        bodyHash: frame.bodyHash,
+        refs: frame.refs,
+      });
+    } catch {
+      deps.counters.ledgerFailures += 1;
+    }
+  }
+}

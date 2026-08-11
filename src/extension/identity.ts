@@ -17,7 +17,7 @@
 //
 // Migration: a legacy single-file <stateDir>/identity.json (v0.1.3-v0.1.7)
 // is read once and moved to the per-session file when its sessionId matches.
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { nowIso } from "../protocol/frames.js";
 import { isValidReservations, type FileReservation } from "../protocol/envelope.js";
@@ -132,6 +132,20 @@ export class MeshIdentity {
       return id;
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * D28: factory-reset this session's identity — /mesh reset behaves like
+   * /new (fresh alias, default rooms, no reservations) while staying in the
+   * same pi session. Best effort — never throws (I10).
+   */
+  reset(sessionId: string): void {
+    if (sessionId === "") return;
+    try {
+      unlinkSync(this.pathFor(sessionId));
+    } catch {
+      // already gone
     }
   }
 

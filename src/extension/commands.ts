@@ -1,7 +1,11 @@
 // extension/commands.ts — /mesh command (§9.3). All output via ctx.ui.notify.
 import { readFileSync } from "node:fs";
+import { MeshClient } from "../client/client.js";
 import type { MeshRole } from "../protocol/envelope.js";
+import { loadConfig } from "../shared/config.js";
 import { brokerLockPath, brokerSocketPath } from "../shared/paths.js";
+import { attachClientListeners } from "./attach.js";
+import type { MeshHud } from "./hud.js";
 import { identityFromClient } from "./identity.js";
 import type { ExtensionAPI, SessionContext } from "./pi-types.js";
 import type { GetRuntime, MeshRuntime } from "./tools.js";
@@ -11,6 +15,8 @@ const HELP_TEXT = [
   "/mesh join <room> [as <alias>] [observer]",
   "/mesh leave <room>",
   "/mesh alias [<new-alias>] — show, or change this session's alias live",
+  "/mesh reset            — factory-reset the mesh identity (like /new: fresh alias,",
+  "                         default rooms, no reservations) WITHOUT leaving this session",
   "/mesh log [on|off]    — opt-in transcript (redacted bodies)",
   "/mesh ping <alias>    — send a one-shot ping message",
   "/mesh broker          — socket path, lock pid, session state",
@@ -152,6 +158,41 @@ async function cmdAlias(rt: MeshRuntime, ctx: SessionContext, alias: string | un
   }
 }
 
+async function cmdReset(
+  rt: MeshRuntime,
+  ctx: SessionContext,
+  pi: ExtensionAPI,
+  getHud: () => MeshHud | null,
+): Promise<void> {
+  // D28: like /new (fresh alias, default rooms, no reservations) but stays in
+  // this pi session, like /reload does for identity preservation.
+  const oldAlias = rt.client.alias;
+  // 1. leave the mesh cleanly (alias/rooms/reservations purged at the broker)
+  await rt.client.close().catch(() => {});
+  // 2. factory-reset the persisted identity for this session
+  rt.identity.reset(rt.sessionId);
+  // 3. spawn a fresh client in-place (same runtime object, re-attached)
+  const config = loadConfig(rt.stateDir);
+  const fresh = new MeshClient({
+    alias: config.alias, // explicit config.alias wins; otherwise random
+    rooms: config.rooms,
+    runtimeDir: rt.runtimeDir,
+    config,
+  });
+  rt.client = fresh;
+  attachClientListeners(pi, rt, getHud, ctx, fresh, (r) => {
+    try {
+      r.identity.save(identityFromClient(r.sessionId, r.client));
+    } catch {
+      // best effort (I10)
+    }
+  });
+  fresh.connect().catch(() => {
+    notify(ctx, "mesh: reset — broker unavailable, tools answer blocked");
+  });
+  notify(ctx, `mesh: identity reset — was @${oldAlias}, reconnecting with a fresh identity…`);
+}
+
 function cmdLog(rt: MeshRuntime, ctx: SessionContext, arg: string | undefined): void {
   if (arg === "on") {
     rt.transcript.setEnabled(true);
@@ -209,6 +250,7 @@ export function registerCommands(
   pi: ExtensionAPI,
   getRuntime: GetRuntime,
   onChanged?: () => void, // HUD refresh after join/leave/log toggles
+  getHud: () => MeshHud | null = () => null,
 ): void {
   pi.registerCommand("mesh", {
     description: "mesh inter-agent coms: status, join/leave, alias, log, ping, broker",
@@ -247,6 +289,10 @@ export function registerCommands(
           break;
         case "broker":
           cmdBroker(rt, ctx);
+          break;
+        case "reset":
+          await cmdReset(rt, ctx, pi, getHud);
+          onChanged?.();
           break;
         case "help":
         case undefined:

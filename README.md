@@ -171,6 +171,11 @@ node dist/src/cli/mesh.js doctor      # socket? lock stale? pid? protocol?
   "mailboxCap": 100, "mailboxTtlMs": 3600000, "ledgerMaxBytes": 5242880 }
 ```
 
+**`/mesh reset` (D28)** factory-resets the mesh identity of the CURRENT pi
+session — like `/new` (fresh random alias, default rooms, no reservations,
+identity file wiped) but WITHOUT leaving the session, while `/reload`
+preserves the identity. Useful to detach a session from a project mesh.
+
 Aliases can also be set at runtime: `/mesh join ops as agent-1` claims the
 alias `agent-1` and joins room `ops` in one step, and
 `/mesh alias <new-alias>` renames at any time. An alias already held by a

@@ -7,7 +7,7 @@ import { describe, it } from "node:test";
 import {
   handleInboundFrame,
   type InboundFailureCounters,
-} from "../src/extension/index.js";
+} from "../src/extension/inbound.js";
 import type { InboundMessage } from "../src/extension/pi-types.js";
 import { buildFrame, type MeshFrame } from "../src/protocol/envelope.js";
 

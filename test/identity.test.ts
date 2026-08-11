@@ -28,13 +28,14 @@ describe("MeshIdentity persistence", () => {
     const { dir, cleanup } = tmpStateDir();
     try {
       const id = new MeshIdentity(dir);
+      const now = new Date().toISOString();
       id.save({
         version: 1,
         sessionId: SID,
         alias: "agent-7",
         rooms: ["default", "ops"],
-        reservations: [{ pattern: "web/x.js", reason: "integrating", since: "2026-08-10T00:00:00.000Z" }],
-        updatedAt: "2026-08-10T00:00:00.000Z",
+        reservations: [{ pattern: "web/x.js", reason: "integrating", since: now }],
+        updatedAt: now,
       });
       const loaded = id.load(SID);
       assert.equal(loaded?.alias, "agent-7");
@@ -215,5 +216,80 @@ describe("client: alias_taken fallback", () => {
       await broker.close();
       rmSync(dirs.root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("MeshIdentity.reset (D28: /mesh reset)", () => {
+  it("removes the per-session identity file; load → null", () => {
+    const { dir, cleanup } = tmpStateDir();
+    try {
+      const id = new MeshIdentity(dir);
+      id.save(identityFromClient(SID, { alias: "agent-1", rooms: ["cs-room"], reservations: [] }));
+      assert.equal(id.load(SID)?.alias, "agent-1");
+      id.reset(SID);
+      assert.equal(id.load(SID), null);
+      assert.equal(identityFileExists(dir, SID), false);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("reset only removes THIS session's identity (others untouched)", () => {
+    const { dir, cleanup } = tmpStateDir();
+    try {
+      const id = new MeshIdentity(dir);
+      const sidA = "019faaaa-0000-7000-8000-0000000000a1";
+      const sidB = "019faaaa-0000-7000-8000-0000000000a2";
+      id.save(identityFromClient(sidA, { alias: "agent-1", rooms: ["cs-room"], reservations: [] }));
+      id.save(identityFromClient(sidB, { alias: "agent-2", rooms: ["cs-room"], reservations: [] }));
+      id.reset(sidA);
+      assert.equal(id.load(sidA), null);
+      assert.equal(id.load(sidB)?.alias, "agent-2", "other sessions keep their identity");
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe("reset E2E (D28): fresh client after reset", () => {
+  it("close + identity.reset + new client → new alias, default rooms, no reservations", async () => {
+    const dirs = makeTempDirs("mesh-reset-e2e-");
+    const broker = await startTestBroker(dirs.runtimeDir);
+    const stateDir = dirs.stateDir;
+    const id = new MeshIdentity(stateDir);
+
+    // session 1: persistent identity with cs-room + a reservation
+    const first = new MeshClient({
+      alias: "agent-1",
+      rooms: ["cs-room"],
+      runtimeDir: dirs.runtimeDir,
+    });
+    await first.connect();
+    await first.join("cs-room");
+    await first.reserve(["web/x.js"], "reset me");
+    id.save(identityFromClient(SID, first));
+    await first.close();
+
+    // the reset itself: identity wiped, fresh client spawned
+    id.reset(SID);
+    assert.equal(id.load(SID), null);
+
+    const second = new MeshClient({
+      alias: undefined, // random — like /new
+      rooms: ["default"],
+      runtimeDir: dirs.runtimeDir,
+    });
+    await second.connect();
+
+    assert.notEqual(second.alias, "agent-1");
+    assert.deepEqual(second.rooms, ["default"]);
+    assert.equal(second.reservations.length, 0);
+    // broker agrees: the new peer is only in default
+    const snap = await second.status();
+    const self = snap.peers.find((p) => p.alias === second.alias);
+    assert.deepEqual(self?.rooms, ["default"]);
+    await second.close();
+    await broker.close();
+    rmSync(dirs.root, { recursive: true, force: true });
   });
 });
