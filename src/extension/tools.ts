@@ -1,7 +1,7 @@
 // extension/tools.ts — the 4 mesh tools (§9.2): mesh_send, mesh_reply,
 // mesh_status, mesh_history. Plain JSON Schema parameters (zero-dependency).
 // Honest statuses: delivered ≠ read ≠ answered (I4). Offline → blocked (I10).
-import { MeshClient, type SendResult } from "../client/client.js";
+import { computePeerStatus, MeshClient, type SendResult } from "../client/client.js";
 import type { MeshPriority } from "../protocol/envelope.js";
 import { buildFrame, normalizeAlias } from "../protocol/envelope.js";
 import { sha256 } from "../protocol/frames.js";
@@ -380,9 +380,21 @@ async function execMeshStatus(
   const lines = [
     `mesh status — alias @${rt.client.alias}${room !== undefined ? ` room=${room}` : ""} (my rooms: ${rt.client.rooms.join(",") || "none"})`,
     `peers (${peers.length}):`,
-    ...peers.map((p) => `  @${p.alias} rooms=${p.rooms.join(",")}${p.since !== undefined ? ` since=${p.since}` : ""}`),
+    ...peers.map((p) => {
+      const act = computePeerStatus(p.lastSeenAt, (p.reservations?.length ?? 0) > 0, rt.client.activityIdleMs, rt.client.activityStuckMs);
+      const actTag = act.status === "active" ? "" : act.status === "stuck" ? ` ✕stuck ${act.idleFor}` : ` ○idle ${act.idleFor}`;
+      return `  @${p.alias} rooms=${p.rooms.join(",")}${p.since !== undefined ? ` since=${p.since}` : ""}${actTag}`;
+    }),
     `mesh rooms: ${snap.rooms.length > 0 ? snap.rooms.join(", ") : "(none)"}`,
   ];
+  const receipts = rt.client.readReceipts(3);
+  if (receipts.length > 0) {
+    lines.push(
+      "",
+      "reads:",
+      ...receipts.map((r) => `  ${r.msgId.slice(0, 18)} → @${r.alias} at ${r.at.slice(11, 19)}`),
+    );
+  }
   return textResult(lines.join("\n"), {
     schema: "mesh.status.v1",
     alias: rt.client.alias,
@@ -422,6 +434,50 @@ function execMeshHistory(
     lines.length > 0 ? lines.join("\n") : "(empty history)",
     { schema: "mesh.history.v1", count: frames.length, withBodies },
   );
+}
+
+// ---------------------------------------------------------------- mesh_ledger
+
+const MESH_LEDGER_PARAMETERS: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    limit: { type: "number", minimum: 1, maximum: 200, description: "Max records (default 20)." },
+    from: { type: "string", description: "Filter: sender alias." },
+    to: { type: "string", description: "Filter: recipient alias." },
+    room: { type: "string", description: "Filter: room." },
+    event: {
+      type: "string",
+      description: "Filter: sent | delivered | queued_offline | reply | expired | blocked | error | inbound | reserved | released",
+    },
+  },
+};
+
+function execMeshLedger(
+  getRuntime: GetRuntime,
+  params: Record<string, unknown>,
+): ToolResult {
+  const rt = getRuntime();
+  if (rt === null) return textResult("blocked: session_not_started", sendDetails({ status: "blocked", reason: "session_not_started" }));
+  const limitRaw = typeof params.limit === "number" ? Math.floor(params.limit) : 20;
+  const limit = Math.min(200, Math.max(1, limitRaw));
+  const records = rt.ledger.read(limit, {
+    from: str(params.from),
+    to: str(params.to),
+    room: str(params.room),
+    event: str(params.event),
+  });
+  if (records.length === 0) {
+    return textResult("(no ledger records matching)", { schema: "mesh.ledger.v1", count: 0 });
+  }
+  const lines = records.map((r) => {
+    const id = r.id !== undefined ? ` ${r.id.slice(0, 18)}` : "";
+    return `${r.ts.slice(11, 19)} ${r.event}${id} ${r.from ?? "?"}→${r.to ?? "*"}${r.room !== undefined ? ` @${r.room}` : ""}${r.code !== undefined ? ` [${r.code}]` : ""}`;
+  });
+  return textResult(lines.join("\n"), {
+    schema: "mesh.ledger.v1",
+    count: records.length,
+    filter: { from: str(params.from), to: str(params.to), room: str(params.room), event: str(params.event) },
+  });
 }
 
 // ---------------------------------------------------------------- mesh_reserve
@@ -565,6 +621,19 @@ export function registerTools(pi: ExtensionAPI, getRuntime: GetRuntime): void {
     parameters: MESH_HISTORY_PARAMETERS,
     execute: (_toolCallId, params, _signal, _onUpdate, _ctx) =>
       Promise.resolve(execMeshHistory(getRuntime, params)),
+  });
+
+  pi.registerTool({
+    name: "mesh_ledger",
+    label: "Mesh Ledger",
+    description:
+      "Durable mesh history from the hash-only ledger (bodies never stored, I1). " +
+      "Filter by sender/recipient/room/event. Use this instead of mesh_history " +
+      "for anything older than the in-memory ring.",
+    promptSnippet: "Query the durable mesh ledger.",
+    parameters: MESH_LEDGER_PARAMETERS,
+    execute: (_toolCallId, params, _signal, _onUpdate, _ctx) =>
+      Promise.resolve(execMeshLedger(getRuntime, params)),
   });
 
   pi.registerTool({

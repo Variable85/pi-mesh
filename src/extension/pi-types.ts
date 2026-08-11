@@ -95,7 +95,7 @@ export interface SendMessageOptions {
   deliverAs?: DeliverAs;
 }
 
-export type SessionEventName = "session_start" | "session_shutdown";
+export type SessionEventName = "session_start" | "session_shutdown" | "session_before_fork";
 
 export type SessionHookHandler = (
   event: unknown,

@@ -370,6 +370,11 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
     }
   };
 
+  /** D34: read receipt — deliver to the original message sender (frame.to). */
+  const routeRead = (from: PeerRecord, frame: MeshFrame): void => {
+    routeOnlineOnly(from, frame, true);
+  };
+
   const routeOnlineOnly = (from: PeerRecord, frame: MeshFrame, silentDrop: boolean): void => {
     const to = frame.to;
     const target = to !== undefined ? state.peers.get(to) : undefined;
@@ -427,6 +432,11 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
         break;
       case "remind":
         routeOnlineOnly(peer, frame, true);
+        break;
+      case "read":
+        // D34: read receipt → routed to the ORIGINAL sender of the msgId,
+        // online-only and silent (never acked, never mailboxed).
+        routeRead(peer, frame);
         break;
       case "ping":
         sendTo(peer, buildFrame({ type: "pong", id: frame.id }));
@@ -546,6 +556,23 @@ const server = net.createServer((socket) => {
     for (const peer of [...state.peers.values()]) {
       if (peer.helloDone && now - peer.lastSeenAt > config.brokerSilenceMs) {
         peer.socket.destroy(); // close event → closePeer
+      }
+    }
+    // D33: expire reservations older than the configured TTL (0 = unlimited),
+    // and tell the peers when something expired.
+    if (config.reservationTtlMs > 0) {
+      for (const peer of [...state.peers.values()]) {
+        const before = peer.reservations.length;
+        if (before === 0) continue;
+        peer.reservations = peer.reservations.filter((r) => {
+          if (r.since === undefined) return true;
+          const t = Date.parse(r.since);
+          if (Number.isNaN(t)) return true;
+          return now - t <= config.reservationTtlMs;
+        });
+        if (peer.reservations.length < before) {
+          broadcastReservations(state, peer, sendTo);
+        }
       }
     }
   }, SWEEP_INTERVAL_MS);

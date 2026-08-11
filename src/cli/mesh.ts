@@ -146,6 +146,71 @@ async function cmdSend(args: string[]): Promise<number> {
   return result.status === "error" || result.status === "blocked" ? 1 : 0;
 }
 
+async function cmdRoom(args: string[], sub: string): Promise<number> {
+  const room = args[0];
+  if (room === undefined) {
+    process.stderr.write(`usage: mesh ${sub} <room>
+`);
+    return 2;
+  }
+  const client = new MeshClient({ alias: cliAlias(), noReconnect: true });
+  try {
+    await client.connect();
+    if (sub === "join") {
+      await client.join(room, args.includes("observer") ? "observer" : "member");
+      process.stdout.write(`joined ${room}
+`);
+    } else if (sub === "leave") {
+      await client.leave(room);
+      process.stdout.write(`left ${room}
+`);
+    } else if (sub === "status") {
+      const snap = await client.status(room);
+      for (const p of snap.peers) {
+        process.stdout.write(`${p.alias}	rooms=${p.rooms.join(",")}	since=${p.since ?? "?"}
+`);
+      }
+    }
+  } catch (err) {
+    process.stderr.write(`${sub} failed: ${err instanceof Error ? err.message : String(err)}
+`);
+    await client.close();
+    return 1;
+  }
+  await client.close();
+  return 0;
+}
+
+async function cmdReserve(args: string[]): Promise<number> {
+  const paths = args.filter((a) => !a.startsWith("--") && !a.startsWith("reason"));
+  const reasonIdx = args.indexOf("--reason");
+  const reason = reasonIdx !== -1 ? args[reasonIdx + 1] : undefined;
+  if (paths.length === 0) {
+    process.stderr.write("usage: mesh reserve <path> [--reason R]\n");
+    return 2;
+  }
+  const client = new MeshClient({ alias: cliAlias(), noReconnect: true });
+  try {
+    await client.connect();
+    const res = await client.reserve(paths, reason);
+    if (res.status === "delivered") {
+      process.stdout.write(`reserved ${paths.join(", ")}
+`);
+      await new Promise((r) => setTimeout(r, 1500)); // keep the claim alive a moment
+    } else {
+      process.stderr.write(`reserve failed: ${"reason" in res ? res.reason : res.status}
+`);
+    }
+    await client.close();
+    return res.status === "delivered" ? 0 : 1;
+  } catch (err) {
+    process.stderr.write(`reserve failed: ${err instanceof Error ? err.message : String(err)}
+`);
+    await client.close();
+    return 1;
+  }
+}
+
 async function cmdTail(): Promise<number> {
   const path = ledgerPath(stateDir());
   if (!existsSync(path)) {

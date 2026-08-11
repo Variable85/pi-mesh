@@ -22,15 +22,33 @@ export function pathMatchesReservation(filePath: string, pattern: string): boole
   return file === pat;
 }
 
+/**
+ * D33: a reservation older than ttlMs is expired and does not block anyone.
+ * ttlMs 0 = unlimited (I11 default).
+ */
+export function isReservationExpired(
+  reservation: FileReservation,
+  ttlMs: number,
+  now: number = Date.now(),
+): boolean {
+  if (ttlMs <= 0) return false;
+  if (reservation.since === undefined) return false;
+  const t = Date.parse(reservation.since);
+  if (Number.isNaN(t)) return false;
+  return now - t > ttlMs;
+}
+
 /** First conflicting reservation for `filePath`, or undefined. */
 export function findConflict(
   filePath: string,
   reservationsByPeer: ReadonlyMap<string, readonly FileReservation[]>,
   selfAlias: string,
+  ttlMs: number = 0,
 ): { alias: string; reservation: FileReservation } | undefined {
   for (const [alias, reservations] of reservationsByPeer) {
     if (alias === selfAlias) continue;
     for (const reservation of reservations) {
+      if (isReservationExpired(reservation, ttlMs)) continue;
       if (pathMatchesReservation(filePath, reservation.pattern)) {
         return { alias, reservation };
       }

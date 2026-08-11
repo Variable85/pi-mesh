@@ -55,6 +55,12 @@ export const ENSURE_BROKER_POLL_MS = 50;
 export const ENSURE_BROKER_MAX_POLLS = 60; // 3 s
 export const LOCK_RETRY_MAX = 3;
 
+// ---- Activity status (D32) ----
+export const DEFAULT_ACTIVITY_IDLE_MS = 120_000; // 2 min without heartbeat/tools
+export const DEFAULT_ACTIVITY_STUCK_MS = 900_000; // 15 min idle WITH reservations
+/** 0 = unlimited (I11: reservations live with the connection). */
+export const DEFAULT_RESERVATION_TTL_MS = 0;
+
 // ---- Identity defaults (§6.4) ----
 export const ALIAS_RAND_CHARS = 6;
 export const MSG_ID_RAND_CHARS = 8;
@@ -79,6 +85,12 @@ export interface MeshConfig {
   transcript: boolean;
   transcriptRetentionDays: number;
   ledgerMaxBytes: number;
+  /** D32: idle after this long without activity (status display). */
+  activityIdleMs: number;
+  /** D32: flagged stuck when idle this long AND holding reservations. */
+  activityStuckMs: number;
+  /** D33: reservations expire after this long (0 = unlimited, I11 default). */
+  reservationTtlMs: number;
 }
 
 export const DEFAULT_CONFIG: MeshConfig = {
@@ -92,6 +104,9 @@ export const DEFAULT_CONFIG: MeshConfig = {
   transcript: false,
   transcriptRetentionDays: DEFAULT_TRANSCRIPT_RETENTION_DAYS,
   ledgerMaxBytes: DEFAULT_LEDGER_MAX_BYTES,
+  activityIdleMs: DEFAULT_ACTIVITY_IDLE_MS,
+  activityStuckMs: DEFAULT_ACTIVITY_STUCK_MS,
+  reservationTtlMs: DEFAULT_RESERVATION_TTL_MS,
 };
 
 function clampFrameBytes(n: number): number {
@@ -146,6 +161,9 @@ export function loadConfig(stateDir?: string, env: NodeJS.ProcessEnv = process.e
       DEFAULT_CONFIG.transcriptRetentionDays,
     ),
     ledgerMaxBytes: positiveInt(fileCfg.ledgerMaxBytes, DEFAULT_CONFIG.ledgerMaxBytes),
+    activityIdleMs: positiveInt(fileCfg.activityIdleMs, DEFAULT_CONFIG.activityIdleMs),
+    activityStuckMs: positiveInt(fileCfg.activityStuckMs, DEFAULT_CONFIG.activityStuckMs),
+    reservationTtlMs: positiveInt(fileCfg.reservationTtlMs, DEFAULT_CONFIG.reservationTtlMs),
   };
   if (typeof fileCfg.alias === "string" && fileCfg.alias.trim() !== "") cfg.alias = fileCfg.alias;
 
@@ -165,6 +183,12 @@ export function loadConfig(stateDir?: string, env: NodeJS.ProcessEnv = process.e
   if (envCap !== undefined) cfg.mailboxCap = envCap;
   const envTtl = envInt(env, "MESH_MAILBOX_TTL_MS");
   if (envTtl !== undefined) cfg.mailboxTtlMs = envTtl;
+  const envIdle = envInt(env, "MESH_ACTIVITY_IDLE_MS");
+  if (envIdle !== undefined) cfg.activityIdleMs = envIdle;
+  const envStuck = envInt(env, "MESH_ACTIVITY_STUCK_MS");
+  if (envStuck !== undefined) cfg.activityStuckMs = envStuck;
+  const envResTtl = envInt(env, "MESH_RESERVATION_TTL_MS");
+  if (envResTtl !== undefined) cfg.reservationTtlMs = envResTtl;
   const envTranscript = env.MESH_TRANSCRIPT;
   if (envTranscript !== undefined) cfg.transcript = envTranscript === "1" || envTranscript === "true";
 

@@ -96,7 +96,7 @@ export default function meshExtension(pi: ExtensionAPI): void {
       if (event.toolName !== "edit" && event.toolName !== "write") return;
       const path = typeof event.input?.path === "string" ? event.input.path : undefined;
       if (path === undefined || path === "") return;
-      const conflict = findConflict(path, rt.client.peerReservationMap, rt.client.alias);
+      const conflict = findConflict(path, rt.client.peerReservationMap, rt.client.alias, rt.client.reservationTtlMs);
       if (conflict === undefined) return;
       const holder = conflict.alias;
       const res = conflict.reservation;
@@ -121,6 +121,19 @@ export default function meshExtension(pi: ExtensionAPI): void {
 
     // NON-blocking connect (I10): failures leave tools answering `blocked`.
     client.connect().catch(() => {});
+  });
+
+  // D35: a pi FORK creates a fresh session — hand the mesh identity over
+  // (like /mesh new, without history) so the forked session keeps alias,
+  // rooms and reservations instead of starting anonymous.
+  pi.on("session_before_fork", (_event, ctx) => {
+    const rt = runtime;
+    if (rt === null) return;
+    try {
+      rt.identity.savePending(identityFromClient(rt.sessionId, rt.client));
+    } catch {
+      // best effort
+    }
   });
 
   pi.on("session_shutdown", async () => {

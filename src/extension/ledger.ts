@@ -2,7 +2,7 @@
 // I1 body-free durable: never a message body, only hashes + metadata.
 // C5 fix: callers write `delivered` ONLY after the broker ack (enforced by wiring).
 // E25: recursive forbidden-key scan before EVERY append → throw fail-closed.
-import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import path from "node:path";
 import { hasForbiddenPersistedKey } from "../protocol/envelope.js";
 import { nowIso } from "../protocol/frames.js";
@@ -70,6 +70,35 @@ export class MeshLedger {
     this.rotateIfNeeded();
     appendFileSync(this.path, JSON.stringify(record) + "\n", "utf8");
     return record;
+  }
+
+  /**
+   * D36: read the last `limit` records, optionally filtered (hash-only — the
+   * ledger never contains bodies, I1). For agents: durable mesh history.
+   */
+  read(limit: number = 20, filter?: { from?: string; to?: string; room?: string; event?: string }): LedgerRecord[] {
+    let content: string;
+    try {
+      content = readFileSync(this.path, "utf8");
+    } catch {
+      return [];
+    }
+    const out: LedgerRecord[] = [];
+    for (const line of content.split("\n")) {
+      if (line.trim() === "") continue;
+      try {
+        const r = JSON.parse(line) as LedgerRecord;
+        if (r.schema !== LEDGER_SCHEMA) continue;
+        if (filter?.from !== undefined && r.from !== filter.from) continue;
+        if (filter?.to !== undefined && r.to !== filter.to) continue;
+        if (filter?.room !== undefined && r.room !== filter.room) continue;
+        if (filter?.event !== undefined && r.event !== filter.event) continue;
+        out.push(r);
+      } catch {
+        // skip malformed
+      }
+    }
+    return out.slice(-limit);
   }
 
   /** Simple rotation: when ledger.jsonl exceeds maxBytes → ledger-<date>.jsonl.1 (§9.5). */

@@ -73,3 +73,24 @@ describe("reservations: conflict lookup", () => {
     assert.equal(c?.alias, "bob");
   });
 });
+
+describe("reservation TTL (D33)", () => {
+  it("expired reservations do not block (ttlMs > 0)", () => {
+    const old = new Date(Date.now() - 3 * 3600_000).toISOString(); // 3h old
+    const fresh = new Date(Date.now() - 600_000).toISOString(); // 10 min
+    const map = new Map<string, readonly FileReservation[]>([
+      ["bob", [{ pattern: "web/stale.js", since: old }]],
+      ["carol", [{ pattern: "web/fresh.js", since: fresh }]],
+    ]);
+    assert.equal(findConflict("web/stale.js", map, "alice", 3600_000), undefined);
+    assert.equal(findConflict("web/fresh.js", map, "alice", 3600_000)?.alias, "carol");
+  });
+
+  it("ttl 0 = unlimited (I11 default)", () => {
+    const old = new Date(Date.now() - 3 * 3600_000).toISOString();
+    const map = new Map<string, readonly FileReservation[]>([
+      ["bob", [{ pattern: "web/stale.js", since: old }]],
+    ]);
+    assert.equal(findConflict("web/stale.js", map, "alice", 0)?.alias, "bob");
+  });
+});

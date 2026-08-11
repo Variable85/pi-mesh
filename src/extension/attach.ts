@@ -89,6 +89,7 @@ export function attachClientListeners(
       transcript: rt.transcript,
       selfAlias: client.alias,
       counters: rt,
+      read: (msgId, from) => client.sendRead(msgId, from),
     });
     getHud()?.noteInbound(frame); // L2 preview: transient memory only, never persisted
   });

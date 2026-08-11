@@ -175,6 +175,8 @@ export interface InboundDeps {
   transcript: { record(dir: "in" | "out", frame: MeshFrame): void };
   selfAlias: string;
   counters: InboundFailureCounters;
+  /** D34: send a read receipt for an injected message (msg/mailbox only). */
+  read?: (msgId: string, from: string) => void;
 }
 
 export function handleInboundFrame(
@@ -187,6 +189,17 @@ export function handleInboundFrame(
     injectInbound(pi, ctx, frame);
   } catch {
     deps.counters.injectionFailures += 1; // one bad frame must not kill the loop (I10)
+  }
+  // D34: the message reached the session → honest read receipt back to the
+  // sender (msg/mailbox only — replies and reminds are not 'new' messages).
+  if (deps.read !== undefined && (frame.type === "msg" || frame.type === "mailbox")) {
+    if (frame.id !== undefined && frame.from !== undefined) {
+      try {
+        deps.read(frame.id, frame.from);
+      } catch {
+        // best effort — a failed receipt must never break the handler
+      }
+    }
   }
   try {
     deps.transcript.record("in", frame);

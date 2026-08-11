@@ -2,6 +2,7 @@
 // pend/failure counters, L2 activity window, no ANSI escapes (TUI-free).
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { computePeerStatus } from "../src/client/client.js";
 import { updateSessionName } from "../src/extension/attach.js";
 import {
   HUD_ACTIVITY_WINDOW_MS,
@@ -201,5 +202,25 @@ describe("visiblePeers (D27): HUD peers share a room with the session", () => {
 
   it("zero rooms → no visible peers (cannot talk to anyone)", () => {
     assert.deepEqual(visiblePeers(snap, "main", []), []);
+  });
+});
+
+describe("computePeerStatus (D32)", () => {
+  it("active under the idle threshold", () => {
+    const s = computePeerStatus(new Date(Date.now() - 10_000).toISOString(), false, 120_000, 900_000);
+    assert.equal(s.status, "active");
+  });
+
+  it("idle after the threshold", () => {
+    const s = computePeerStatus(new Date(Date.now() - 300_000).toISOString(), false, 120_000, 900_000);
+    assert.equal(s.status, "idle");
+    assert.ok(s.idleFor);
+  });
+
+  it("STUCK only when idle past stuckMs AND holding reservations", () => {
+    const s1 = computePeerStatus(new Date(Date.now() - 1_800_000).toISOString(), true, 120_000, 900_000);
+    assert.equal(s1.status, "stuck");
+    const s2 = computePeerStatus(new Date(Date.now() - 1_800_000).toISOString(), false, 120_000, 900_000);
+    assert.equal(s2.status, "idle", "no reservations → idle, not stuck");
   });
 });

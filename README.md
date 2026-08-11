@@ -101,10 +101,30 @@ daemon management needed. Try `npm run smoke` for a full headless demo
 |---|---|---|
 | `mesh_send` | `to?`, `message`, `room?`, `broadcast?`, `priority?`, `reason?`, `awaitReply?`, `timeoutMs?`, `refs?` | `delivered` / `queued_offline` / `reply: …` / `expired` / `blocked: …` |
 | `mesh_reply` | `msgId`, `message`, `replyAll?`, `to?`, `refs?` | `delivered` or `blocked: reply_without_target` |
-| `mesh_status` | `room?`, `all?` | live broker snapshot — by default only peers **sharing a room** with the session (D29); `all: true` for the whole mesh |
+| `mesh_status` | `room?`, `all?` | live broker snapshot — only peers **sharing a room** (D29), with **activity status** (`○idle` / `✕stuck` when idle long with reservations, D32) and **read receipts** (`reads:` — D34); `all: true` for the whole mesh |
+| `mesh_ledger` | `limit?`, `from?`, `to?`, `room?`, `event?` | durable **hash-only** history (I1) — bodies never stored, survives restarts (D36) |
 | `mesh_history` | `limit?`, `withBodies?` | local **memory ring** (never the ledger) |
 | `mesh_reserve` | `paths`, `reason?` | reserve files/dirs — peers' `edit`/`write` get blocked on them |
 | `mesh_release` | `paths?` (omit = all) | release reservations, peers notified immediately |
+
+**Read receipts (D34)**: when a message is injected into a session, the
+client sends a `read` frame back to the sender — `mesh_status` then shows
+`reads: m_xxx → @agent-2 at 10:22`. This completes the honest-status
+promise: `delivered ≠ read ≠ answered`.
+
+**Activity status (D32)**: the broker exposes each peer's last activity
+(heartbeats/tool frames); `mesh_status` and the HUD mark `○idle` after
+`activityIdleMs` (2 min) and `✕stuck` when idle past `activityStuckMs`
+(15 min) while holding reservations — orchestrators can spot blocked
+agents. Config: `activityIdleMs`, `activityStuckMs`.
+
+**Reservation TTL (D33)**: `reservationTtlMs` (default `0` = unlimited,
+I11) expires stale claims — the broker sweeps and notifies peers, and
+`findConflict` ignores expired reservations.
+
+**Fork identity (D35)**: a pi `fork` now hands the mesh identity over
+(alias, rooms, reservations) like `/mesh new` — the forked session is not
+anonymous anymore.
 
 **Reply handling (D25)**: replies are deduped — only the FIRST answer to a
 given msgId reaches the session (via `awaitReply` or as an injected orphan);
@@ -171,6 +191,11 @@ node dist/src/cli/mesh.js doctor      # socket? lock stale? pid? protocol?
   "mailboxCap": 100, "mailboxTtlMs": 3600000, "ledgerMaxBytes": 5242880 }
 ```
 
+> **I1 note**: `/mesh new --history` stages up to 30 message bodies in
+> `identity-pending.json` (15 min TTL, deleted after consumption) — an
+> explicit opt-in handover, the only body persistence outside the opt-in
+> transcript.
+
 **`/mesh new [--history]` (D30)** opens a fresh pi session like pi's `/new`
 (blank conversation) but HANDS OVER the mesh identity: alias, rooms and
 reservations are staged and consumed by the new session (the broker may
@@ -206,6 +231,10 @@ crashed session still holds the alias, the client falls back to a random one
   "forceAllowedFrom": ["lead"],
   "rateLimits": { "msgPerMin": 30, "urgentPerMin": 5, "forcePerMin": 1 } }
 ```
+
+The **`mesh-coordination` skill** (skills/mesh-coordination) is bundled in
+the package: a protocol guide for agents (reply once per msgId, expired ≠
+lost, reservation etiquette) — loaded on demand like any pi skill.
 
 Env overrides: `MESH_ALIAS`, `MESH_ROOMS`, `MESH_RUNTIME_DIR`,
 `MESH_STATE_DIR`, `MESH_MAX_FRAME_BYTES`, `MESH_MAILBOX_CAP`,

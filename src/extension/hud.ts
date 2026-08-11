@@ -3,7 +3,7 @@
 // without a TUI. MeshHud owns state + ctx.ui.setWidget/setStatus wiring.
 // Body previews are transient memory only — never persisted (I1).
 
-import type { StatusSnapshot } from "../client/client.js";
+import { computePeerStatus, type StatusSnapshot } from "../client/client.js";
 import type { MeshFrame } from "../protocol/envelope.js";
 import type { SessionContext } from "./pi-types.js";
 import type { GetRuntime } from "./tools.js";
@@ -253,7 +253,13 @@ export class MeshHud {
       // "@cs-room,voice" because it listed every room of the mesh.)
       rooms,
       // D27: only peers sharing a room with this session are visible.
-      peers: visiblePeers(this.snapshot, self, rooms),
+      // D32: stuck peers (idle long with reservations) are marked ✕.
+      peers: visiblePeers(this.snapshot, self, rooms).map((alias) => {
+        const p = this.snapshot?.peers.find((x) => x.alias === alias);
+        if (p === undefined) return alias;
+        const act = computePeerStatus(p.lastSeenAt, (p.reservations?.length ?? 0) > 0, rt?.client.activityIdleMs ?? 0, rt?.client.activityStuckMs ?? 0);
+        return act.status === "stuck" ? `${alias}✕` : alias;
+      }),
       pending: rt?.client.pendingCount ?? 0,
       transcriptOn: rt?.transcript.isEnabled() === true,
       ledgerFailures: rt?.ledgerFailures ?? 0,

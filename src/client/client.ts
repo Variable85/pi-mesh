@@ -81,6 +81,43 @@ export function isBroadcastResult(res: SendResult): res is Extract<SendResult, {
   return res.status === "delivered" || res.status === "queued_offline";
 }
 
+// ---- D32: activity status ----
+
+export interface PeerActivityStatus {
+  status: "active" | "idle" | "stuck";
+  idleFor?: string;
+}
+
+export function formatDurationShort(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  if (hours > 0) return `${hours}h${minutes % 60}m`;
+  if (minutes > 0) return `${minutes}m${seconds % 60}s`;
+  return `${seconds}s`;
+}
+
+/**
+ * D32: activity status from the broker's lastSeenAt — idle after
+ * activityIdleMs, STUCK when idle past activityStuckMs AND holding
+ * reservations (a peer with claims that never progresses blocks others).
+ */
+export function computePeerStatus(
+  lastSeenAt: string | undefined,
+  hasReservations: boolean,
+  idleMs: number,
+  stuckMs: number,
+  now: number = Date.now(),
+): PeerActivityStatus {
+  if (lastSeenAt === undefined) return { status: "active" };
+  const t = Date.parse(lastSeenAt);
+  if (Number.isNaN(t)) return { status: "active" };
+  const elapsed = now - t;
+  if (elapsed < idleMs) return { status: "active" };
+  if (hasReservations && elapsed >= stuckMs) return { status: "stuck", idleFor: formatDurationShort(elapsed) };
+  return { status: "idle", idleFor: formatDurationShort(elapsed) };
+}
+
 export interface MeshClientOpts {
   alias?: string;
   rooms?: string[];
@@ -155,6 +192,8 @@ export class MeshClient extends EventEmitter {
   readonly transcript: MeshFrame[] = [];
   /** Own file reservations (D21) — declared at hello, updated via reserve/release. */
   private ownReservations: FileReservation[] = [];
+  /** D34: msgIds we sent that have been READ by peers (read receipts). */
+  private readonly readBy = new Map<string, { alias: string; at: string }>();
   /** Latest known reservations per peer, fed by welcome/reserve broadcasts. */
   private readonly peerReservations = new Map<string, FileReservation[]>();
   /**
@@ -189,6 +228,42 @@ export class MeshClient extends EventEmitter {
   /** All rooms this client is a member of (re-declared at every hello). */
   get rooms(): readonly string[] {
     return [...this.joinedRooms];
+  }
+
+  /** D32: activity status thresholds from config. */
+  get activityIdleMs(): number {
+    return this.config.activityIdleMs;
+  }
+
+  /** D34: who read a msgId we sent ({alias, at}) — from read receipts. */
+  readsOf(msgId: string): { alias: string; at: string }[] {
+    const r = this.readBy.get(msgId);
+    return r !== undefined && r.alias !== this.alias ? [{ ...r }] : [];
+  }
+
+  /** D34: all read receipts we hold, newest first. */
+  readReceipts(limit = 5): { msgId: string; alias: string; at: string }[] {
+    return [...this.readBy.entries()]
+      .reverse()
+      .slice(0, limit)
+      .map(([msgId, r]) => ({ msgId, alias: r.alias, at: r.at }));
+  }
+
+  /** D34: send a read receipt for an inbound msgId back to its sender. */
+  sendRead(msgId: string, to: string): void {
+    if (!this.online) return;
+    const frame = buildFrame({ type: "read", from: this.alias, to, reads: msgId });
+    this.writeOrQueue(frame);
+    this.ring(frame);
+  }
+
+  get activityStuckMs(): number {
+    return this.config.activityStuckMs;
+  }
+
+  /** D33: reservation TTL (0 = unlimited, I11). */
+  get reservationTtlMs(): number {
+    return this.config.reservationTtlMs;
   }
 
   isOnline(): boolean {
@@ -516,6 +591,15 @@ export class MeshClient extends EventEmitter {
           if (frame.id) this.inbox.set(frame.id, frame);
           this.emit("inbound", frame);
         }
+        break;
+      }
+      case "read": {
+        // D34: read receipt for one of our msgIds — tracked, no turn.
+        const msgId = frame.reads;
+        if (msgId !== undefined && frame.from !== undefined) {
+          this.readBy.set(msgId, { alias: frame.from, at: frame.ts });
+        }
+        this.emit("read", frame);
         break;
       }
       case "presence":

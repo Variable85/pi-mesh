@@ -112,6 +112,7 @@ export function peersSnapshot(state: BrokerState, roomId?: string): {
   rooms: string[];
   role?: MeshRole;
   since?: string;
+  lastSeenAt?: string;
   reservations?: FileReservation[];
 }[] {
   const out: {
@@ -119,6 +120,7 @@ export function peersSnapshot(state: BrokerState, roomId?: string): {
     rooms: string[];
     role?: MeshRole;
     since?: string;
+    lastSeenAt?: string;
     reservations?: FileReservation[];
   }[] = [];
   for (const peer of state.peers.values()) {
@@ -130,6 +132,7 @@ export function peersSnapshot(state: BrokerState, roomId?: string): {
       rooms,
       role: roomId !== undefined ? peer.rooms.get(roomId) : peer.rooms.get(DEFAULT_ROOM),
       since: new Date(peer.connectedAt).toISOString(),
+      lastSeenAt: new Date(peer.lastSeenAt).toISOString(),
       reservations: peer.reservations.length > 0 ? [...peer.reservations] : undefined,
     });
   }

@@ -25,6 +25,8 @@ export interface MeshPeerInfo {
   rooms: string[];
   role?: MeshRole;
   since?: string;
+  /** D32: last broker-seen activity (heartbeat/tool frames) — status calc. */
+  lastSeenAt?: string;
   reservations?: FileReservation[];
 }
 
@@ -57,6 +59,8 @@ export interface MeshFrame {
   replyAll?: boolean; // reply: fan-out the answer to the whole room (D24)
   deliveredCount?: number; // ack: broadcast/replyAll deliveries (D24)
   totalCount?: number; // ack: broadcast/replyAll targets (D24)
+  /** D34: msgId the sender is acknowledging as READ (read receipt). */
+  reads?: string;
   ts: string;
 }
 
@@ -75,6 +79,7 @@ export const FRAME_TYPES = [
   "join",
   "leave",
   "reserve",
+  "read",
   "ping",
   "pong",
   "error",
@@ -209,6 +214,7 @@ export interface BuildFrameOpts {
   replyAll?: boolean;
   deliveredCount?: number;
   totalCount?: number;
+  reads?: string;
 }
 
 /** Build a protocol-valid frame; bodyHash auto-computed when body present. */
@@ -244,6 +250,7 @@ export function buildFrame(opts: BuildFrameOpts): MeshFrame {
   if (opts.replyAll !== undefined) frame.replyAll = opts.replyAll;
   if (opts.deliveredCount !== undefined) frame.deliveredCount = opts.deliveredCount;
   if (opts.totalCount !== undefined) frame.totalCount = opts.totalCount;
+  if (opts.reads !== undefined) frame.reads = opts.reads;
   return frame;
 }
 
@@ -393,6 +400,15 @@ export function validateFrame(value: unknown, opts: ValidateOpts = {}): Validati
       if (value.type !== "reply") {
         return { ok: false, code: "invalid_frame", detail: "replyAll on non-reply" };
       }
+    }
+  }
+  // D34: read receipts — only on "read" frames, with a target msgId
+  if (value.type === "read") {
+    if (typeof value.reads !== "string" || value.reads.length === 0 || value.reads.length > MAX_FRAME_ID_CHARS) {
+      return { ok: false, code: "invalid_frame", detail: "bad reads" };
+    }
+    if (typeof value.to !== "string") {
+      return { ok: false, code: "invalid_frame", detail: "read without to" };
     }
   }
   for (const key of ["deliveredCount", "totalCount"] as const) {
