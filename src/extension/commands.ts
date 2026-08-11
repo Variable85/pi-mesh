@@ -177,11 +177,11 @@ async function cmdNew(
         )
     : undefined;
   rt.identity.savePending(identityFromClient(rt.sessionId, rt.client), history);
-  if (typeof ctx.actions?.newSession !== "function") {
-    notify(ctx, "mesh: /mesh new requires a TUI session (actions.newSession unavailable)");
+  if (typeof ctx.newSession !== "function") {
+    notify(ctx, "mesh: /mesh new requires a TUI session (newSession unavailable)");
     return;
   }
-  const res = await ctx.actions.newSession();
+  const res = await ctx.newSession();
   if (res.cancelled) {
     notify(ctx, "mesh: new session cancelled — identity handoff left pending (auto-expires)");
     return;
