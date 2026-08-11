@@ -199,6 +199,7 @@ async function cmdNew(
   // NOTE: do NOT touch `ctx` here (stale after newSession). If the user
   // cancelled, the staged pending expires by itself (PENDING_TTL_MS).
   void res;
+}
 
 async function cmdReset(
   rt: MeshRuntime,
