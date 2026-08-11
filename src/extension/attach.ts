@@ -54,17 +54,28 @@ export function attachClientListeners(
     // D21 identity: tell the agent who it is, once per connection, so it
     // never has to guess its alias (the old file-based mesh had agents
     // confusing each other's identities). display:false keeps it out of
-    // the UI; triggerTurn:false avoids an extra turn.
+    // the UI; triggerTurn:false avoids an extra turn. Peers are filtered to
+    // those sharing a room (room visibility rule) — the welcome lists all.
     const roomList = (welcome.rooms.length > 0 ? welcome.rooms.join(",") : "default");
-    const peers = welcome.peers.map((p) => `@${p.alias}`).join(", ") || "(none)";
+    const myRooms = new Set(roomList.split(","));
+    const peers = welcome.peers
+      .filter((p) => p.alias !== client.alias && p.rooms.some((r) => myRooms.has(r)))
+      .map((p) => `@${p.alias}`)
+      .join(", ") || "(none)";
+    let context =
+      `[mesh] you are @${client.alias} (rooms: ${roomList}). ` +
+      `Online peers: ${peers}. ` +
+      `mesh_send/mesh_reply to talk, mesh_status for a live snapshot, ` +
+      `mesh_reserve to claim files before editing them.`;
+    // D30: a /mesh new handoff may carry the previous session's history —
+    // inject it as context so the fresh conversation keeps the thread.
+    if (rt.pendingHistory !== undefined && rt.pendingHistory.length > 0) {
+      context += `\n\n[mesh] transferred history from the previous session:\n${rt.pendingHistory.join("\n")}`;
+    }
     pi.sendMessage(
       {
         customType: "mesh-context",
-        content:
-          `[mesh] you are @${client.alias} (rooms: ${roomList}). ` +
-          `Online peers: ${peers}. ` +
-          `mesh_send/mesh_reply to talk, mesh_status for a live snapshot, ` +
-          `mesh_reserve to claim files before editing them.`,
+        content: context,
         display: false,
       },
       { triggerTurn: false },

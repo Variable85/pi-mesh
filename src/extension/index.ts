@@ -9,6 +9,7 @@ import { MeshGuards } from "./guards.js";
 import { MeshHud } from "./hud.js";
 import { attachClientListeners } from "./attach.js";
 import { injectInbound } from "./inbound.js";
+import type { PersistedIdentity } from "./identity.js";
 import { identityFromClient, MeshIdentity } from "./identity.js";
 import { MeshLedger } from "./ledger.js";
 import type { ExtensionAPI } from "./pi-types.js";
@@ -43,7 +44,17 @@ export default function meshExtension(pi: ExtensionAPI): void {
     // mesh identity when the extension is reloaded.
     const sessionId = ctx.sessionManager?.getSessionId() ?? "";
     const identity = new MeshIdentity(sDir);
-    const persisted = identity.load(sessionId);
+    // D30: /mesh new handoff — the staged identity (alias/rooms/reservations
+    // and optionally the history) is consumed by the next session_start.
+    let persisted: PersistedIdentity | null = identity.load(sessionId);
+    let pendingHistory: string[] | undefined;
+    if (persisted === null) {
+      const pending = identity.consumePending();
+      if (pending !== null) {
+        persisted = pending.identity;
+        pendingHistory = pending.history;
+      }
+    }
     const client = new MeshClient({
       // explicit config.alias always wins; then the persisted alias; else random
       alias: config.alias ?? persisted?.alias,
@@ -65,6 +76,7 @@ export default function meshExtension(pi: ExtensionAPI): void {
       runtimeDir: rDir,
       sessionId,
       identity,
+      pendingHistory,
       startedAt: Date.now(),
       ledgerFailures: 0,
       transcriptFailures: 0,

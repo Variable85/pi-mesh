@@ -29,6 +29,10 @@ export interface SessionContext {
   sessionManager?: {
     getSessionId(): string;
   };
+  /** Pi command actions — newSession() lets /mesh new open a fresh session. */
+  actions?: {
+    newSession?(opts?: { parentSession?: string }): Promise<{ cancelled: boolean }>;
+  };
   ui: {
     notify(message: string, opts?: { level?: string }): void;
     /**

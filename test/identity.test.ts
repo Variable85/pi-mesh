@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { MeshClient } from "../src/client/client.js";
 import {
+  PENDING_TTL_MS,
   identityFileExists,
   identityFromClient,
   identityPath,
@@ -291,5 +292,45 @@ describe("reset E2E (D28): fresh client after reset", () => {
     await second.close();
     await broker.close();
     rmSync(dirs.root, { recursive: true, force: true });
+  });
+});
+
+describe("identity pending handoff (D30: /mesh new)", () => {
+  it("savePending → consumePending transfers identity + history (old sessionId ignored)", () => {
+    const { dir, cleanup } = tmpStateDir();
+    try {
+      const id = new MeshIdentity(dir);
+      const sidA = "019faaaa-0000-7000-8000-0000000000b1";
+      id.savePending(
+        identityFromClient(sidA, { alias: "agent-1", rooms: ["cs-room"], reservations: [{ pattern: "web/x.js", since: new Date().toISOString() }] }),
+        ["10:00 msg agent-1→agent-2 MISSION", "10:05 reply agent-2→agent-1 done"],
+      );
+      // consumed by a DIFFERENT session (new sessionId)
+      const taken = id.consumePending();
+      assert.equal(taken?.identity.alias, "agent-1");
+      assert.deepEqual(taken?.identity.rooms, ["cs-room"]);
+      assert.equal(taken?.identity.reservations[0]?.pattern, "web/x.js");
+      assert.deepEqual(taken?.history, ["10:00 msg agent-1→agent-2 MISSION", "10:05 reply agent-2→agent-1 done"]);
+      assert.equal(id.consumePending(), null, "file cleared after consume");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("stale pending (older than TTL) is dropped", () => {
+    const { dir, cleanup } = tmpStateDir();
+    try {
+      const id = new MeshIdentity(dir);
+      const stale = identityFromClient("019faaaa-0000-7000-8000-0000000000b2", {
+        alias: "agent-1",
+        rooms: ["cs-room"],
+        reservations: [],
+      });
+      stale.updatedAt = new Date(Date.now() - PENDING_TTL_MS - 60_000).toISOString();
+      id.savePending(stale);
+      assert.equal(id.consumePending(), null);
+    } finally {
+      cleanup();
+    }
   });
 });

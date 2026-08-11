@@ -15,6 +15,8 @@ const HELP_TEXT = [
   "/mesh join <room> [as <alias>] [observer]",
   "/mesh leave <room>",
   "/mesh alias [<new-alias>] — show, or change this session's alias live",
+  "/mesh new [--history]  — fresh pi session like /new, mesh identity (alias, rooms,",
+  "                         reservations) handed over; --history carries the last frames",
   "/mesh reset            — factory-reset the mesh identity (like /new: fresh alias,",
   "                         default rooms, no reservations) WITHOUT leaving this session",
   "/mesh log [on|off]    — opt-in transcript (redacted bodies)",
@@ -158,6 +160,37 @@ async function cmdAlias(rt: MeshRuntime, ctx: SessionContext, alias: string | un
   }
 }
 
+async function cmdNew(
+  rt: MeshRuntime,
+  ctx: SessionContext,
+  withHistory: boolean,
+): Promise<void> {
+  // D30: /mesh new — like pi's /new (fresh conversation) but the mesh
+  // identity (alias, rooms, reservations) is handed to the NEXT session via
+  // identity-pending.json; the next session_start consumes it.
+  const history = withHistory
+    ? rt.client.transcript
+        .slice(-30)
+        .map(
+          (f) =>
+            `${f.ts.slice(11, 19)} ${f.type} ${f.from ?? "?"}→${f.to ?? "*"}: ${(f.body ?? "").slice(0, 120)}`,
+        )
+    : undefined;
+  rt.identity.savePending(identityFromClient(rt.sessionId, rt.client), history);
+  if (typeof ctx.actions?.newSession !== "function") {
+    notify(ctx, "mesh: /mesh new requires a TUI session (actions.newSession unavailable)");
+    return;
+  }
+  const res = await ctx.actions.newSession();
+  if (res.cancelled) {
+    notify(ctx, "mesh: new session cancelled — identity handoff left pending (auto-expires)");
+    return;
+  }
+  // The new session's session_start consumes the pending identity; this
+  // session's client stays alive until pi closes it.
+  notify(ctx, `mesh: new session opened — @${rt.client.alias} handed off (rooms/reservations kept)`);
+}
+
 async function cmdReset(
   rt: MeshRuntime,
   ctx: SessionContext,
@@ -289,6 +322,9 @@ export function registerCommands(
           break;
         case "broker":
           cmdBroker(rt, ctx);
+          break;
+        case "new":
+          await cmdNew(rt, ctx, rest.includes("--history") || rest.includes("history"));
           break;
         case "reset":
           await cmdReset(rt, ctx, pi, getHud);

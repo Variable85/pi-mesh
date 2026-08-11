@@ -24,9 +24,12 @@ import { isValidReservations, type FileReservation } from "../protocol/envelope.
 
 export const IDENTITY_FILE_NAME = "identity.json"; // legacy single-file name
 export const IDENTITY_PREFIX = "identity-";
+export const IDENTITY_PENDING_NAME = "identity-pending.json";
 export const IDENTITY_VERSION = 1;
 /** Persisted reservations older than this are NOT re-declared at hello. */
 export const RESERVATION_TTL_MS = 86_400_000; // 24 h
+/** D30: a /mesh new handoff is only valid for this long. */
+export const PENDING_TTL_MS = 900_000; // 15 min
 
 export interface PersistedIdentity {
   version: typeof IDENTITY_VERSION;
@@ -78,13 +81,13 @@ export class MeshIdentity {
     return path.join(this.stateDir, IDENTITY_FILE_NAME);
   }
 
-  private parse(raw: string, sessionId: string): PersistedIdentity | null {
+  private parse(raw: string, sessionId: string, ignoreSessionId = false): PersistedIdentity | null {
     try {
       const value: unknown = JSON.parse(raw);
       if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
       const id = value as Record<string, unknown>;
       if (id.version !== IDENTITY_VERSION) return null;
-      if (id.sessionId !== sessionId) return null;
+      if (!ignoreSessionId && id.sessionId !== sessionId) return null;
       if (typeof id.alias !== "string" || id.alias === "") return null;
       const rooms = Array.isArray(id.rooms)
         ? id.rooms.filter((r): r is string => typeof r === "string")
@@ -146,6 +149,70 @@ export class MeshIdentity {
       unlinkSync(this.pathFor(sessionId));
     } catch {
       // already gone
+    }
+  }
+
+  // ---- D30: /mesh new identity handoff ----
+
+  private get pendingPath(): string {
+    return path.join(this.stateDir, IDENTITY_PENDING_NAME);
+  }
+
+  /**
+   * Stage the current identity for the NEXT session (created by /mesh new):
+   * alias + rooms + reservations (and optionally a compact history) travel
+   * through identity-pending.json, consumed by the next session_start.
+   */
+  savePending(
+    identity: PersistedIdentity,
+    history?: string[],
+  ): void {
+    try {
+      mkdirSync(this.stateDir, { recursive: true });
+      const payload = { ...identity, history };
+      const tmp = this.pendingPath + ".tmp";
+      writeFileSync(tmp, JSON.stringify(payload, null, 2) + "\n", "utf8");
+      renameSync(tmp, this.pendingPath);
+    } catch {
+      // best effort
+    }
+  }
+
+  /**
+   * Take the staged identity (if fresh enough) and clear the file.
+   * Returns { identity, history } or null. The history is the compact
+   * transferred conversation (D30 --history flag).
+   */
+  consumePending(now: number = Date.now()): { identity: PersistedIdentity; history?: string[] } | null {
+    let raw: string;
+    try {
+      raw = readFileSync(this.pendingPath, "utf8");
+    } catch {
+      return null;
+    }
+    try {
+      const value: unknown = JSON.parse(raw);
+      if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+      const p = value as Record<string, unknown>;
+      if (typeof p.updatedAt !== "string") return null;
+      const age = now - Date.parse(p.updatedAt);
+      if (Number.isNaN(age) || age < 0 || age > PENDING_TTL_MS) {
+        try {
+          unlinkSync(this.pendingPath); // stale handoff — drop it
+        } catch {
+          // already gone
+        }
+        return null;
+      }
+      const parsed = this.parse(raw, "", true); // pending carries the OLD sessionId
+      if (parsed === null) return null;
+      const history = Array.isArray(p.history)
+        ? p.history.filter((h): h is string => typeof h === "string")
+        : undefined;
+      unlinkSync(this.pendingPath);
+      return { identity: parsed, history: history !== undefined && history.length > 0 ? history : undefined };
+    } catch {
+      return null;
     }
   }
 

@@ -101,7 +101,7 @@ daemon management needed. Try `npm run smoke` for a full headless demo
 |---|---|---|
 | `mesh_send` | `to?`, `message`, `room?`, `broadcast?`, `priority?`, `reason?`, `awaitReply?`, `timeoutMs?`, `refs?` | `delivered` / `queued_offline` / `reply: …` / `expired` / `blocked: …` |
 | `mesh_reply` | `msgId`, `message`, `replyAll?`, `to?`, `refs?` | `delivered` or `blocked: reply_without_target` |
-| `mesh_status` | `room?` | live broker snapshot (peers, rooms, **reservations**) |
+| `mesh_status` | `room?`, `all?` | live broker snapshot — by default only peers **sharing a room** with the session (D29); `all: true` for the whole mesh |
 | `mesh_history` | `limit?`, `withBodies?` | local **memory ring** (never the ledger) |
 | `mesh_reserve` | `paths`, `reason?` | reserve files/dirs — peers' `edit`/`write` get blocked on them |
 | `mesh_release` | `paths?` (omit = all) | release reservations, peers notified immediately |
@@ -170,6 +170,13 @@ node dist/src/cli/mesh.js doctor      # socket? lock stale? pid? protocol?
 { "alias": "alice", "rooms": ["default"], "transcript": false,
   "mailboxCap": 100, "mailboxTtlMs": 3600000, "ledgerMaxBytes": 5242880 }
 ```
+
+**`/mesh new [--history]` (D30)** opens a fresh pi session like pi's `/new`
+(blank conversation) but HANDS OVER the mesh identity: alias, rooms and
+reservations are staged and consumed by the new session (the broker may
+briefly see alias_taken while the old session closes — the retry backoff
+handles it). `--history` also transfers the last 30 mesh frames as context.
+Stale handoffs expire after 15 min.
 
 **`/mesh reset` (D28)** factory-resets the mesh identity of the CURRENT pi
 session — like `/new` (fresh random alias, default rooms, no reservations,

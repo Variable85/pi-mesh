@@ -35,6 +35,8 @@ export interface MeshRuntime {
   sessionId: string;
   /** Identity persistence (alias/rooms/reservations survive reloads). */
   identity: MeshIdentity;
+  /** D30: transferred history from a /mesh new handoff (injected at ready). */
+  pendingHistory?: string[];
   startedAt: number;
   /** B1: inbound-path disk/injection failure counters (see index.ts). */
   ledgerFailures: number;
@@ -344,6 +346,11 @@ const MESH_STATUS_PARAMETERS: Record<string, unknown> = {
   type: "object",
   properties: {
     room: { type: "string", description: "Restrict the snapshot to one room." },
+    all: {
+      type: "boolean",
+      description: "D29: show EVERY peer of the mesh (all rooms). Default: only peers " +
+        "sharing a room with this session (the room visibility rule).",
+    },
   },
 };
 
@@ -362,17 +369,25 @@ async function execMeshStatus(
     }
   }
   const snap = await rt.client.status(room);
+  // D29: by default, only peers VISIBLE from this session (sharing at least
+  // one room) are listed — an agent alone in "voice" must not see the
+  // cs-room agents. all:true (or an explicit room filter) lifts that.
+  const mine = new Set(room !== undefined ? [room] : rt.client.rooms);
+  const visible = snap.peers.filter(
+    (p) => p.alias === rt.client.alias || mine.size === 0 || p.rooms.some((r) => mine.has(r)),
+  );
+  const peers = params.all === true ? snap.peers : visible;
   const lines = [
-    `mesh status — alias @${rt.client.alias}${room !== undefined ? ` room=${room}` : ""}`,
-    `peers (${snap.peers.length}):`,
-    ...snap.peers.map((p) => `  @${p.alias} rooms=${p.rooms.join(",")}${p.since !== undefined ? ` since=${p.since}` : ""}`),
-    `rooms: ${snap.rooms.length > 0 ? snap.rooms.join(", ") : "(none)"}`,
+    `mesh status — alias @${rt.client.alias}${room !== undefined ? ` room=${room}` : ""} (my rooms: ${rt.client.rooms.join(",") || "none"})`,
+    `peers (${peers.length}):`,
+    ...peers.map((p) => `  @${p.alias} rooms=${p.rooms.join(",")}${p.since !== undefined ? ` since=${p.since}` : ""}`),
+    `mesh rooms: ${snap.rooms.length > 0 ? snap.rooms.join(", ") : "(none)"}`,
   ];
   return textResult(lines.join("\n"), {
     schema: "mesh.status.v1",
     alias: rt.client.alias,
     room,
-    peers: snap.peers.map((p) => ({ alias: p.alias, rooms: p.rooms, since: p.since })),
+    peers: peers.map((p) => ({ alias: p.alias, rooms: p.rooms, since: p.since })),
     rooms: snap.rooms,
   });
 }
