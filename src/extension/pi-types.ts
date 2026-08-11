@@ -126,6 +126,9 @@ export interface ExtensionAPI {
   registerCommand(name: string, def: CommandDefinition): void;
   sendMessage(msg: InboundMessage, opts?: SendMessageOptions): void;
   appendEntry(customType: string, data?: unknown): void;
+  /** Session display name — shown in /resume and the session selector (D31). */
+  setSessionName?(name: string): void;
+  getSessionName?(): string | undefined;
 }
 
 /** Helper: a single-paragraph text tool result. */

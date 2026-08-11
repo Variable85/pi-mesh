@@ -2,6 +2,7 @@
 // pend/failure counters, L2 activity window, no ANSI escapes (TUI-free).
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { updateSessionName } from "../src/extension/attach.js";
 import {
   HUD_ACTIVITY_WINDOW_MS,
   HUD_PREVIEW_MAX,
@@ -200,5 +201,56 @@ describe("visiblePeers (D27): HUD peers share a room with the session", () => {
 
   it("zero rooms → no visible peers (cannot talk to anyone)", () => {
     assert.deepEqual(visiblePeers(snap, "main", []), []);
+  });
+});
+
+describe("updateSessionName (D31): /resume shows alias + rooms", () => {
+  function fakePi(initial?: string): {
+    pi: {
+      setSessionName(name: string): void;
+      getSessionName(): string | undefined;
+    };
+    names: string[];
+  } {
+    let current: string | undefined = initial;
+    const names: string[] = [];
+    return {
+      pi: {
+        setSessionName: (name: string) => {
+          names.push(name);
+          current = name;
+        },
+        getSessionName: () => current,
+      },
+      names,
+    };
+  }
+
+  function fakeRt(alias: string, rooms: string[]): { client: { alias: string; rooms: string[] } } {
+    return { client: { alias, rooms } };
+  }
+
+  it("sets 'mesh @alias · rooms' when no name exists", () => {
+    const { pi, names } = fakePi(undefined);
+    updateSessionName(pi as never, fakeRt("agent-1", ["cs-room"]) as never);
+    assert.deepEqual(names, ["mesh @agent-1 · cs-room"]);
+  });
+
+  it("refreshes when the name is already a mesh name (rename/join)", () => {
+    const { pi, names } = fakePi("mesh @agent-1 · cs-room");
+    updateSessionName(pi as never, fakeRt("agent-1", ["cs-room", "voice"]) as never);
+    assert.deepEqual(names, ["mesh @agent-1 · cs-room,voice"]);
+  });
+
+  it("NEVER overwrites a user-defined session name", () => {
+    const { pi, names } = fakePi("my custom session");
+    updateSessionName(pi as never, fakeRt("agent-1", ["cs-room"]) as never);
+    assert.deepEqual(names, []);
+  });
+
+  it("no rooms → 'mesh @alias'", () => {
+    const { pi, names } = fakePi(undefined);
+    updateSessionName(pi as never, fakeRt("main", []) as never);
+    assert.deepEqual(names, ["mesh @main"]);
   });
 });

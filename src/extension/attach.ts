@@ -9,6 +9,23 @@ import type { ExtensionAPI, SessionContext } from "./pi-types.js";
 import type { MeshRuntime } from "./tools.js";
 
 /**
+ * D31: name the pi session so /resume and the session selector show the mesh
+ * identity at a glance: `mesh @agent-1 · cs-room`. A user-defined name is
+ * NEVER overwritten; the mesh name is refreshed on ready/rename/join/leave.
+ */
+export function updateSessionName(pi: ExtensionAPI, rt: MeshRuntime): void {
+  try {
+    if (typeof pi.getSessionName !== "function" || typeof pi.setSessionName !== "function") return;
+    const current = pi.getSessionName();
+    if (current !== undefined && current !== "" && !current.startsWith("mesh ")) return;
+    const rooms = rt.client.rooms.length > 0 ? ` · ${rt.client.rooms.join(",")}` : "";
+    pi.setSessionName(`mesh @${rt.client.alias}${rooms}`);
+  } catch {
+    // best effort
+  }
+}
+
+/**
  * Attach every client event handler to `client`. `rt` is the CURRENT runtime
  * object (its `.client` field may be replaced later by /mesh reset — the
  * handlers always read the runtime they were attached with, so the reset path
@@ -48,6 +65,8 @@ export function attachClientListeners(
   client.on("ready", (welcome: WelcomeInfo) => {
     getHud()?.setConnecting(false);
     getHud()?.fetchStatus(); // fire-and-forget, never blocks session_start
+    // D31: session name for /resume (alias + rooms).
+    updateSessionName(pi, rt);
     // D23: persist identity as soon as we are connected (covers the very
     // first connect AND every reconnect/rename/reset).
     saveIdentity(rt);
@@ -82,6 +101,7 @@ export function attachClientListeners(
     );
   });
   client.on("renamed", () => {
+    updateSessionName(pi, rt);
     saveIdentity(rt);
   });
   client.on("alias_fallback", ({ from, to }: { from: string; to: string }) => {

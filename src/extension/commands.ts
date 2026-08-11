@@ -5,7 +5,7 @@ import type { MeshRole } from "../protocol/envelope.js";
 import { loadConfig } from "../shared/config.js";
 import { brokerLockPath, brokerSocketPath } from "../shared/paths.js";
 import { MESH_VERSION } from "../shared/version.js";
-import { attachClientListeners } from "./attach.js";
+import { attachClientListeners, updateSessionName } from "./attach.js";
 import type { MeshHud } from "./hud.js";
 import { identityFromClient } from "./identity.js";
 import type { ExtensionAPI, SessionContext } from "./pi-types.js";
@@ -91,7 +91,8 @@ async function cmdJoin(
   ctx: SessionContext,
   room: string | undefined,
   observer: boolean,
-  asAlias?: string,
+  asAlias: string | undefined,
+  pi: ExtensionAPI,
 ): Promise<void> {
   // `/mesh join <room> as <alias>`: rename first (re-hello), then join.
   // A rename failure NEVER aborts the join — the session keeps its current
@@ -116,12 +117,13 @@ async function cmdJoin(
     await rt.client.join(room, role);
     notify(ctx, `mesh: joined ${room} as ${role}`);
     persistIdentity(rt);
+    updateSessionName(pi, rt);
   } catch (err) {
     notify(ctx, `mesh: join failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
-async function cmdLeave(rt: MeshRuntime, ctx: SessionContext, room: string | undefined): Promise<void> {
+async function cmdLeave(rt: MeshRuntime, ctx: SessionContext, room: string | undefined, pi: ExtensionAPI): Promise<void> {
   if (room === undefined) {
     notify(ctx, "usage: /mesh leave <room>");
     return;
@@ -130,6 +132,7 @@ async function cmdLeave(rt: MeshRuntime, ctx: SessionContext, room: string | und
     await rt.client.leave(room);
     notify(ctx, `mesh: left ${room}`);
     persistIdentity(rt);
+    updateSessionName(pi, rt);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg === "not_member") {
@@ -143,7 +146,7 @@ async function cmdLeave(rt: MeshRuntime, ctx: SessionContext, room: string | und
   }
 }
 
-async function cmdAlias(rt: MeshRuntime, ctx: SessionContext, alias: string | undefined): Promise<void> {
+async function cmdAlias(rt: MeshRuntime, ctx: SessionContext, alias: string | undefined, pi: ExtensionAPI): Promise<void> {
   if (alias === undefined) {
     notify(ctx, `mesh alias: @${rt.client.alias}`);
     return;
@@ -153,6 +156,7 @@ async function cmdAlias(rt: MeshRuntime, ctx: SessionContext, alias: string | un
     if (renamed.unchanged !== true) {
       notify(ctx, `mesh: alias changed @${renamed.alias}`);
       persistIdentity(rt);
+      updateSessionName(pi, rt);
     } else {
       notify(ctx, `mesh alias: @${rt.client.alias}`);
     }
@@ -234,6 +238,7 @@ async function cmdReset(
   fresh.connect().catch(() => {
     notify(ctx, "mesh: reset — broker unavailable, tools answer blocked");
   });
+  updateSessionName(pi, rt);
   notify(ctx, `mesh: identity reset — was @${oldAlias}, reconnecting with a fresh identity…`);
 }
 
@@ -313,16 +318,16 @@ export function registerCommands(
         case "join": {
           // `/mesh join <room> [as <alias>] [observer]`
           const parsed = parseJoinArgs(rest);
-          await cmdJoin(rt, ctx, parsed.room, parsed.observer, parsed.asAlias);
+          await cmdJoin(rt, ctx, parsed.room, parsed.observer, parsed.asAlias, pi);
           onChanged?.();
           break;
         }
         case "leave":
-          await cmdLeave(rt, ctx, rest[0]);
+          await cmdLeave(rt, ctx, rest[0], pi);
           onChanged?.();
           break;
         case "alias":
-          await cmdAlias(rt, ctx, rest[0]);
+          await cmdAlias(rt, ctx, rest[0], pi);
           onChanged?.();
           break;
         case "log":
