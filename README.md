@@ -240,6 +240,33 @@ Env overrides: `MESH_ALIAS`, `MESH_ROOMS`, `MESH_RUNTIME_DIR`,
 `MESH_STATE_DIR`, `MESH_MAX_FRAME_BYTES`, `MESH_MAILBOX_CAP`,
 `MESH_MAILBOX_TTL_MS`, `MESH_TRANSCRIPT=1`, `MESH_POLICY`.
 
+## Multi-machine (D37)
+
+The mesh is loopback-only by default; to connect several machines (a VPS, a
+LAN PC, …) start the broker on ONE machine in **TCP mode** with a shared
+token, and point the other machines' clients at it:
+
+```bash
+# Machine A (broker + agents) — open the port in the firewall
+MESH_LISTEN=tcp://0.0.0.0:8712 MESH_BROKER_TOKEN=mon-secret pi
+
+# Machine B (clients only — no local broker is spawned)
+MESH_BROKER_URL=tcp://<ip-de-A>:8712 MESH_BROKER_TOKEN=mon-secret pi
+```
+
+- `tcp://` for LAN/VPN (Tailscale/ZeroTier/WireGuard recommended), `tls://`
+  for a VPS (set `MESH_TLS_CERT`/`MESH_TLS_KEY` on the broker; clients may
+  set `MESH_TLS_CA`, or `MESH_TLS_INSECURE=1` for self-signed — dev only).
+- **The token is REQUIRED** for tcp/tls listens; hello without it →
+  `invalid_token` (the token travels hashed, sha256).
+- Everything works unchanged across machines: rooms, broadcast, read
+  receipts, mailbox, reservations, activity status (state lives in the
+  broker). Use `mesh doctor` to check the endpoint/auth on any machine.
+- Aliases must stay **unique mesh-wide**: prefix per machine
+  (`MESH_ALIAS=pcB-agent-2`). Identities/ledgers stay local to each
+  machine; reservations protect the same repo paths when both machines
+  share the same git checkout (always reserve repo-relative paths).
+
 ## Platform notes
 
 - **Windows**: AF_UNIX sockets are unavailable on win32 (`listen` throws

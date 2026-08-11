@@ -61,6 +61,8 @@ export interface MeshFrame {
   totalCount?: number; // ack: broadcast/replyAll targets (D24)
   /** D34: msgId the sender is acknowledging as READ (read receipt). */
   reads?: string;
+  /** D37: shared auth token hash (hello only) — required on tcp/tls brokers. */
+  token?: string;
   ts: string;
 }
 
@@ -93,6 +95,7 @@ export const ERROR_CODES = [
   "invalid_alias",
   "alias_taken",
   "invalid_room",
+  "invalid_token",
   "not_member",
   "observer_readonly",
   "last_room",
@@ -215,6 +218,7 @@ export interface BuildFrameOpts {
   deliveredCount?: number;
   totalCount?: number;
   reads?: string;
+  token?: string;
 }
 
 /** Build a protocol-valid frame; bodyHash auto-computed when body present. */
@@ -251,6 +255,7 @@ export function buildFrame(opts: BuildFrameOpts): MeshFrame {
   if (opts.deliveredCount !== undefined) frame.deliveredCount = opts.deliveredCount;
   if (opts.totalCount !== undefined) frame.totalCount = opts.totalCount;
   if (opts.reads !== undefined) frame.reads = opts.reads;
+  if (opts.token !== undefined) frame.token = opts.token;
   return frame;
 }
 
@@ -373,6 +378,16 @@ export function validateFrame(value: unknown, opts: ValidateOpts = {}): Validati
   // Rule 8: reservations (hello/welcome/reserve/status_res) — shape-checked
   if (value.reservations !== undefined && !isValidReservations(value.reservations)) {
     return { ok: false, code: "invalid_frame", detail: "bad reservations" };
+  }
+
+  // Rule 9b: auth token — hello only, bounded (D37)
+  if (value.token !== undefined) {
+    if (value.type !== "hello") {
+      return { ok: false, code: "invalid_frame", detail: "token on non-hello" };
+    }
+    if (typeof value.token !== "string" || value.token.length === 0 || value.token.length > 128) {
+      return { ok: false, code: "invalid_frame", detail: "bad token" };
+    }
   }
 
   // Rule 9: broadcast / replyAll fan-out (D24)

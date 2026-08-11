@@ -1,7 +1,9 @@
 // client/client.ts — MeshClient: connect/send/reply/status/join/leave/close (§8).
 // Pi-independent (I9): emits events; the extension adapter consumes them.
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
 import net, { type Socket } from "node:net";
+import tls from "node:tls";
 import { randomBytes } from "node:crypto";
 import {
   buildFrame,
@@ -21,6 +23,7 @@ import { encodeFrame, FrameDecoder, sha256 } from "../protocol/frames.js";
 import {
   ACK_TIMEOUT_MS,
   ALIAS_RAND_CHARS,
+  parseEndpoint,
   DEFAULT_AWAIT_REPLY_TIMEOUT_MS,
   DEFAULT_CONFIG,
   DEFAULT_ROOM,
@@ -412,8 +415,28 @@ export class MeshClient extends EventEmitter {
   }
 
   private async doConnect(): Promise<WelcomeInfo> {
-    const sockPath = await ensureBroker(this.runtimeDir); // throws broker_unavailable (I10)
-    const socket = net.createConnection(sockPath);
+    // D37: explicit broker URL (tcp/tls/unix) → connect there; otherwise the
+    // local auto-spawned broker (ensureBroker).
+    const endpoint = this.config.brokerUrl !== undefined ? parseEndpoint(this.config.brokerUrl) : null;
+    let socket: Socket;
+    if (endpoint !== null && (endpoint.kind === "tcp" || endpoint.kind === "tls")) {
+      const opts = {
+        host: endpoint.host,
+        port: endpoint.port,
+        ...(endpoint.kind === "tls"
+          ? {
+              ca: this.config.tlsCa !== undefined ? readFileSync(this.config.tlsCa) : undefined,
+              rejectUnauthorized: this.config.tlsInsecure === true ? false : undefined,
+            }
+          : {}),
+      };
+      socket = endpoint.kind === "tls" ? tls.connect(opts) : net.createConnection(opts);
+    } else if (endpoint !== null && endpoint.kind === "unix") {
+      socket = net.createConnection(endpoint.path);
+    } else {
+      const sockPath = await ensureBroker(this.runtimeDir); // throws broker_unavailable (I10)
+      socket = net.createConnection(sockPath);
+    }
     this.socket = socket;
     const decoder = new FrameDecoder(this.config.maxFrameBytes);
 
@@ -435,6 +458,7 @@ export class MeshClient extends EventEmitter {
           from: this.alias,
           rooms: [...this.joinedRooms],
           reservations: this.ownReservations.length > 0 ? [...this.ownReservations] : undefined,
+          token: this.config.brokerToken !== undefined ? sha256(this.config.brokerToken) : undefined,
         });
         socket.write(encodeFrame(hello, this.config.maxFrameBytes));
       });

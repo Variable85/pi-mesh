@@ -2,6 +2,7 @@
 // Run directly (`node dist/src/broker/broker.js`) or via startBroker({config, policy}) in tests.
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import net, { type Server, type Socket } from "node:net";
+import tls from "node:tls";
 import { fileURLToPath } from "node:url";
 import {
   buildFrame,
@@ -9,10 +10,11 @@ import {
   type MeshErrorCode,
   type MeshFrame,
 } from "../protocol/envelope.js";
-import { encodeFrame, FrameDecoder, FrameSizeError, makeMsgId } from "../protocol/frames.js";
+import { encodeFrame, FrameDecoder, FrameSizeError, makeMsgId, sha256 } from "../protocol/frames.js";
 import {
   DEFAULT_MAX_FRAME_BYTES,
   DEFAULT_ROOM,
+  parseEndpoint,
   HELLO_TIMEOUT_MS,
   MAILBOX_PURGE_INTERVAL_MS,
   SWEEP_INTERVAL_MS,
@@ -39,6 +41,8 @@ export interface BrokerOptions {
   config: MeshConfig;
   policy: MeshPolicy;
   socketPath?: string;
+  /** D37: TCP/TLS listen (host+port) — otherwise the unix socket is used. */
+  tcpListen?: { host: string; port: number; tls: boolean };
 }
 
 export interface RunningBroker {
@@ -89,6 +93,7 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
   const { config, policy } = options;
   const sockPath = options.socketPath ?? brokerSocketPath();
   const state = new BrokerState();
+  const tcp = options.tcpListen;
 
   const sendTo = (peer: PeerRecord, frame: MeshFrame): void => {
     writeFrame(peer.socket, frame, config.maxFrameBytes, (ok) => {
@@ -162,6 +167,15 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
       sendError(socket, "invalid_alias", frame.id);
       socket.destroy();
       return;
+    }
+    // D37: tcp/tls brokers require the shared token (sha256 match)
+    if (options.tcpListen !== undefined) {
+      const expected = config.brokerToken !== undefined ? sha256(config.brokerToken) : undefined;
+      if (expected === undefined || frame.token !== expected) {
+        sendError(socket, "invalid_token", frame.id);
+        socket.destroy();
+        return;
+      }
     }
     const existing = state.peers.get(alias);
     if (existing && existing.socket !== socket && !existing.socket.destroyed) {
@@ -505,7 +519,7 @@ function broadcastReservations(
   }
 }
 
-const server = net.createServer((socket) => {
+const serverHandler = (socket: Socket): void => {
     socket.setNoDelay(true);
     const decoder = new FrameDecoder(config.maxFrameBytes);
     // handshake bound: hello ≤ 5 s (§6.1)
@@ -548,7 +562,17 @@ const server = net.createServer((socket) => {
         if (peer.socket === socket) closePeer(state, peer.alias, "socket_closed");
       }
     });
-  });
+};
+
+const server = tcp !== undefined && tcp.tls
+    ? tls.createServer(
+        {
+          cert: config.tlsCert !== undefined ? readFileSync(config.tlsCert) : undefined,
+          key: config.tlsKey !== undefined ? readFileSync(config.tlsKey) : undefined,
+        },
+        serverHandler,
+      )
+    : net.createServer(serverHandler);
 
   // silence sweep: destroy sockets silent > brokerSilenceMs (§7.6 — only sweep, on sockets)
   const sweep = setInterval(() => {
@@ -583,12 +607,16 @@ const server = net.createServer((socket) => {
 
   return new Promise((resolve, reject) => {
     server.once("error", reject);
-    server.listen(sockPath, () => {
+    const onListening = (): void => {
       server.removeListener("error", reject);
+      const addr = server.address();
+      const bound = typeof addr === "object" && addr !== null && "port" in addr
+        ? `tcp://${tcp?.host ?? "0.0.0.0"}:${addr.port}`
+        : sockPath;
       resolve({
         server,
         state,
-        socketPath: sockPath,
+        socketPath: bound,
         close: () =>
           new Promise<void>((res) => {
             clearInterval(sweep);
@@ -597,7 +625,9 @@ const server = net.createServer((socket) => {
             server.close(() => res());
           }),
       });
-    });
+    };
+    if (tcp !== undefined) server.listen(tcp.port, tcp.host, onListening);
+    else server.listen(sockPath, onListening);
   });
 }
 

@@ -73,6 +73,25 @@ export const TRANSCRIPT_RING_SIZE = 200;
 export const DEFAULT_LEDGER_MAX_BYTES = 5_242_880; // 5 MiB
 export const DEFAULT_TRANSCRIPT_RETENTION_DAYS = 7;
 
+export type MeshEndpoint =
+  | { kind: "unix"; path: string }
+  | { kind: "tcp"; host: string; port: number }
+  | { kind: "tls"; host: string; port: number };
+
+/** Parse `tcp://host:port`, `tls://host:port`, `unix:///path` (D37). */
+export function parseEndpoint(url: string): MeshEndpoint | null {
+  const m = /^(tcp|tls|unix):\/\/(.+)$/.exec(url.trim());
+  if (m === null || m[1] === undefined || m[2] === undefined) return null;
+  const scheme = m[1];
+  const rest = m[2];
+  if (scheme === "unix") return { kind: "unix", path: rest };
+  const hm = /^(\[[0-9a-fA-F:]+\]|[^:]+):(\d{1,5})$/.exec(rest);
+  if (hm === null || hm[1] === undefined || hm[2] === undefined) return null;
+  const port = Number(hm[2]);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) return null;
+  return { kind: scheme as "tcp" | "tls", host: hm[1].replace(/^\[|\]$/g, ""), port };
+}
+
 export interface MeshConfig {
   alias?: string;
   rooms: string[];
@@ -91,6 +110,19 @@ export interface MeshConfig {
   activityStuckMs: number;
   /** D33: reservations expire after this long (0 = unlimited, I11 default). */
   reservationTtlMs: number;
+  /** D37: broker listen endpoint (broker side). Default: local socket. */
+  listen?: string;
+  /** D37: broker endpoint the CLIENT connects to (remote or local). */
+  brokerUrl?: string;
+  /** D37: shared auth token — REQUIRED for tcp/tls endpoints. */
+  brokerToken?: string;
+  /** D37: TLS server cert/key (broker, for tls:// listen). */
+  tlsCert?: string;
+  tlsKey?: string;
+  /** D37: TLS CA (client, to verify a custom server cert). */
+  tlsCa?: string;
+  /** D37: accept self-signed certs (INSECURE — LAN/dev only). */
+  tlsInsecure?: boolean;
 }
 
 export const DEFAULT_CONFIG: MeshConfig = {
@@ -166,8 +198,28 @@ export function loadConfig(stateDir?: string, env: NodeJS.ProcessEnv = process.e
     reservationTtlMs: positiveInt(fileCfg.reservationTtlMs, DEFAULT_CONFIG.reservationTtlMs),
   };
   if (typeof fileCfg.alias === "string" && fileCfg.alias.trim() !== "") cfg.alias = fileCfg.alias;
+  if (typeof fileCfg.listen === "string" && parseEndpoint(fileCfg.listen) !== null) cfg.listen = fileCfg.listen;
+  if (typeof fileCfg.brokerUrl === "string" && parseEndpoint(fileCfg.brokerUrl) !== null) cfg.brokerUrl = fileCfg.brokerUrl;
+  if (typeof fileCfg.brokerToken === "string" && fileCfg.brokerToken.trim() !== "") cfg.brokerToken = fileCfg.brokerToken;
+  if (typeof fileCfg.tlsCert === "string" && fileCfg.tlsCert !== "") cfg.tlsCert = fileCfg.tlsCert;
+  if (typeof fileCfg.tlsKey === "string" && fileCfg.tlsKey !== "") cfg.tlsKey = fileCfg.tlsKey;
+  if (typeof fileCfg.tlsCa === "string" && fileCfg.tlsCa !== "") cfg.tlsCa = fileCfg.tlsCa;
+  if (fileCfg.tlsInsecure === true) cfg.tlsInsecure = true;
 
   // env overrides (priority over config file)
+  const envListen = env.MESH_LISTEN;
+  if (envListen !== undefined && parseEndpoint(envListen) !== null) cfg.listen = envListen;
+  const envBrokerUrl = env.MESH_BROKER_URL;
+  if (envBrokerUrl !== undefined && parseEndpoint(envBrokerUrl) !== null) cfg.brokerUrl = envBrokerUrl;
+  const envToken = env.MESH_BROKER_TOKEN;
+  if (envToken !== undefined && envToken.trim() !== "") cfg.brokerToken = envToken;
+  const envCert = env.MESH_TLS_CERT;
+  if (envCert !== undefined && envCert !== "") cfg.tlsCert = envCert;
+  const envKey = env.MESH_TLS_KEY;
+  if (envKey !== undefined && envKey !== "") cfg.tlsKey = envKey;
+  const envCa = env.MESH_TLS_CA;
+  if (envCa !== undefined && envCa !== "") cfg.tlsCa = envCa;
+  if (env.MESH_TLS_INSECURE === "1" || env.MESH_TLS_INSECURE === "true") cfg.tlsInsecure = true;
   const envAlias = env.MESH_ALIAS;
   if (envAlias && envAlias.trim() !== "") cfg.alias = envAlias;
   const envRooms = env.MESH_ROOMS;

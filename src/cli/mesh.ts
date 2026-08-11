@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { MeshClient, type SendResult } from "../client/client.js";
 import { connectProbe } from "../client/reconnect.js";
 import { ALIAS_RAND_CHARS, STATUS_REQ_TIMEOUT_MS } from "../shared/config.js";
+import { loadConfig } from "../shared/config.js";
 import {
   brokerLockPath,
   brokerSocketPath,
@@ -227,7 +228,15 @@ async function cmdDoctor(): Promise<number> {
   const dir = runtimeDir();
   const sock = brokerSocketPath(dir);
   const lock = brokerLockPath(dir);
-  const reachable = await connectProbe(sock, STATUS_REQ_TIMEOUT_MS);
+  const cfg = loadConfig(stateDir());
+  const url = cfg.brokerUrl;
+  const listen = cfg.listen;
+  const reachable = url !== undefined
+    ? await connectProbe(
+        url.startsWith("unix://") ? url.slice("unix://".length) : url,
+        STATUS_REQ_TIMEOUT_MS,
+      )
+    : await connectProbe(sock, STATUS_REQ_TIMEOUT_MS);
   let lockInfo = "absent";
   let stale = false;
   if (existsSync(lock)) {
