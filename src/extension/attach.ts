@@ -73,17 +73,28 @@ export function attachClientListeners(
     // D21 identity: tell the agent who it is, once per connection, so it
     // never has to guess its alias (the old file-based mesh had agents
     // confusing each other's identities). display:false keeps it out of
-    // the UI; triggerTurn:false avoids an extra turn. Peers are filtered to
-    // those sharing a room (room visibility rule) — the welcome lists all.
+    // the UI; triggerTurn:false avoids an extra turn. The context keeps the
+    // FULL picture: peers sharing a room are listed first, the other
+    // sessions (with their rooms) after — the agent must know who is where.
     const roomList = (welcome.rooms.length > 0 ? welcome.rooms.join(",") : "default");
     const myRooms = new Set(roomList.split(","));
-    const peers = welcome.peers
-      .filter((p) => p.alias !== client.alias && p.rooms.some((r) => myRooms.has(r)))
-      .map((p) => `@${p.alias}`)
-      .join(", ") || "(none)";
+    const others = welcome.peers.filter((p) => p.alias !== client.alias);
+    const online = others.filter((p) => p.rooms.some((r) => myRooms.has(r)));
+    const far = others.filter((p) => !p.rooms.some((r) => myRooms.has(r)));
+    const peerLine =
+      online.length > 0
+        ? `Online peers: ${online.map((p) => `@${p.alias}`).join(", ")}.`
+        : "Online peers: (none).";
+    const farLine =
+      far.length > 0
+        ? ` Other sessions: ${far
+            .slice(0, 12)
+            .map((p) => `@${p.alias} (${p.rooms.join(",") || "?"})`)
+            .join(", ")}${far.length > 12 ? ` (+${far.length - 12} more)` : ""}.`
+        : "";
     let context =
       `[mesh] you are @${client.alias} (rooms: ${roomList}). ` +
-      `Online peers: ${peers}. ` +
+      `${peerLine}${farLine} ` +
       `mesh_send/mesh_reply to talk, mesh_status for a live snapshot, ` +
       `mesh_reserve to claim files before editing them.`;
     // D30: a /mesh new handoff may carry the previous session's history —
