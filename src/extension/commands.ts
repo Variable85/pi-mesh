@@ -4,6 +4,7 @@ import { MeshClient } from "../client/client.js";
 import type { MeshRole } from "../protocol/envelope.js";
 import { loadConfig } from "../shared/config.js";
 import { brokerLockPath, brokerSocketPath } from "../shared/paths.js";
+import { MESH_VERSION } from "../shared/version.js";
 import { attachClientListeners } from "./attach.js";
 import type { MeshHud } from "./hud.js";
 import { identityFromClient } from "./identity.js";
@@ -280,6 +281,7 @@ function cmdBroker(rt: MeshRuntime, ctx: SessionContext): void {
     ctx,
     [
       `mesh broker:`,
+      `  version: ${MESH_VERSION}`,
       `  socket: ${sock}`,
       `  lock: ${lockInfo}`,
       `  online: ${rt.client.isOnline()}`,
