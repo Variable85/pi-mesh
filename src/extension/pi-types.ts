@@ -28,6 +28,7 @@ export interface SessionContext {
   /** Pi session manager (read-only surface) — stable sessionId across reloads. */
   sessionManager?: {
     getSessionId(): string;
+    getSessionFile?(): string;
   };
   /** Pi command actions — newSession() lets /mesh new open a fresh session.
    *  Direct method on the command context (not under actions). Post-replacement

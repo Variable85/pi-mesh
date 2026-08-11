@@ -1,6 +1,7 @@
 // extension/attach.ts — client→session wiring, shared by session_start and
 // /mesh reset (D28): both need a fully-wired MeshClient, and reset must be
 // able to REPLACE the client in-place without a pi reload.
+import { readFileSync } from "node:fs";
 import type { WelcomeInfo } from "../client/client.js";
 import type { MeshFrame } from "../protocol/envelope.js";
 import type { MeshHud } from "./hud.js";
@@ -8,10 +9,51 @@ import { handleInboundFrame } from "./inbound.js";
 import type { ExtensionAPI, SessionContext } from "./pi-types.js";
 import type { MeshRuntime } from "./tools.js";
 
+/** D31: session name keeps the first user message after the mesh identity. */
+const SESSION_NAME_MSG_MAX = 80;
+const SESSION_NAME_SCAN_BYTES = 256 * 1024; // first 256 KiB of the session file
+
+/**
+ * Read the FIRST user message of the session file (what pi's /resume shows
+ * when no name is set). Best effort; the scan stops at the first user text.
+ */
+function firstUserMessage(sessionFile: string | undefined): string | undefined {
+  if (sessionFile === undefined || sessionFile === "") return undefined;
+  let head: string;
+  try {
+    head = readFileSync(sessionFile, "utf8").slice(0, SESSION_NAME_SCAN_BYTES);
+  } catch {
+    return undefined;
+  }
+  for (const line of head.split("\n")) {
+    if (line.trim() === "") continue;
+    let entry: { type?: string; message?: { role?: string; content?: unknown } };
+    try {
+      entry = JSON.parse(line) as { type?: string; message?: { role?: string; content?: unknown } };
+    } catch {
+      continue;
+    }
+    if (entry.type !== "message" || entry.message?.role !== "user") continue;
+    const content = entry.message.content;
+    const text = Array.isArray(content)
+      ? content
+          .map((c) => (typeof c === "object" && c !== null && (c as { type?: string; text?: string }).type === "text" ? (c as { text?: string }).text ?? "" : ""))
+          .join(" ")
+          .trim()
+      : typeof content === "string"
+        ? content.trim()
+        : "";
+    if (text.length > 0) return text.length > SESSION_NAME_MSG_MAX ? `${text.slice(0, SESSION_NAME_MSG_MAX - 1)}…` : text;
+  }
+  return undefined;
+}
+
 /**
  * D31: name the pi session so /resume and the session selector show the mesh
- * identity at a glance: `mesh @agent-1 · cs-room`. A user-defined name is
- * NEVER overwritten; the mesh name is refreshed on ready/rename/join/leave.
+ * identity AND the conversation: `mesh @agent-1 · cs-room — <first message>`.
+ * A user-defined name is NEVER overwritten; the mesh name is refreshed on
+ * ready/rename/join/leave. The first message is kept exactly like pi's
+ * default display (session.name ?? session.firstMessage) so nothing is lost.
  */
 export function updateSessionName(pi: ExtensionAPI, rt: MeshRuntime): void {
   try {
@@ -19,7 +61,8 @@ export function updateSessionName(pi: ExtensionAPI, rt: MeshRuntime): void {
     const current = pi.getSessionName();
     if (current !== undefined && current !== "" && !current.startsWith("mesh ")) return;
     const rooms = rt.client.rooms.length > 0 ? ` · ${rt.client.rooms.join(",")}` : "";
-    pi.setSessionName(`mesh @${rt.client.alias}${rooms}`);
+    const first = firstUserMessage(rt.ctx?.sessionManager?.getSessionFile?.());
+    pi.setSessionName(`mesh @${rt.client.alias}${rooms}${first !== undefined ? ` — ${first}` : ""}`);
   } catch {
     // best effort
   }
