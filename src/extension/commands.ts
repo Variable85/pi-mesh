@@ -181,15 +181,24 @@ async function cmdNew(
     notify(ctx, "mesh: /mesh new requires a TUI session (newSession unavailable)");
     return;
   }
-  const res = await ctx.newSession();
-  if (res.cancelled) {
-    notify(ctx, "mesh: new session cancelled — identity handoff left pending (auto-expires)");
-    return;
-  }
-  // The new session's session_start consumes the pending identity; this
-  // session's client stays alive until pi closes it.
-  notify(ctx, `mesh: new session opened — @${rt.client.alias} handed off (rooms/reservations kept)`);
-}
+  // The ctx becomes STALE after newSession() resolves — notify BEFORE, and
+  // do any post-replacement work inside withSession (fresh ctx).
+  notify(ctx, `mesh: opening a new session — @${rt.client.alias} handed off (rooms/reservations kept)`);
+  const res = await ctx.newSession({
+    withSession: async (newCtx) => {
+      // fresh session context: report the handoff there
+      try {
+        newCtx.ui?.notify("mesh: identity handoff received — same alias/rooms/reservations", {
+          level: "info",
+        });
+      } catch {
+        // best effort
+      }
+    },
+  });
+  // NOTE: do NOT touch `ctx` here (stale after newSession). If the user
+  // cancelled, the staged pending expires by itself (PENDING_TTL_MS).
+  void res;
 
 async function cmdReset(
   rt: MeshRuntime,

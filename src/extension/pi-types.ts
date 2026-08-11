@@ -30,8 +30,12 @@ export interface SessionContext {
     getSessionId(): string;
   };
   /** Pi command actions — newSession() lets /mesh new open a fresh session.
-   *  Direct method on the command context (not under actions). */
-  newSession?(opts?: { parentSession?: string }): Promise<{ cancelled: boolean }>;
+   *  Direct method on the command context (not under actions). Post-replacement
+   *  work must go through withSession (the old ctx is stale after the call). */
+  newSession?(opts?: {
+    parentSession?: string;
+    withSession?(ctx: SessionContext): Promise<void>;
+  }): Promise<{ cancelled: boolean }>;
   ui: {
     notify(message: string, opts?: { level?: string }): void;
     /**
