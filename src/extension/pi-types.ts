@@ -148,7 +148,9 @@ export type SessionEventName =
   | "session_before_fork"
   | "tool_result"
   | "agent_settled" // turn finished → announce idle
-  | "after_provider_response"; // provider HTTP status (429 detection)
+  | "after_provider_response" // provider HTTP status (fallback signal)
+  | "turn_end" // failed turns carry stopReason "error" + errorMessage
+  | "model_select"; // human switched the model → lift the hold
 
 export type SessionHookHandler = (
   event: unknown,

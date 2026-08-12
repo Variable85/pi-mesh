@@ -269,9 +269,15 @@ MESH_BROKER_URL=tcp://<machine-A>:8712 MESH_BROKER_TOKEN=change-me pi
   that burn rate-limited requests; `mesh_wait_all` says "retry later");
   PERMANENT ones (401/403/404…) flag `✖ blocked` (retrying won't heal —
   needs a human). The flag sticks for a 30 s cooldown after the last error.
-  While rate-limited, the session also HOLDS inbound injections (messages
-  and reminders are queued, nothing burns a failed turn) and delivers
-  them when the quota likely resets (60 s) — no more 429 ping-pong.
+  While flagged, the session also HOLDS inbound injections (messages and
+  reminders are queued, nothing burns a failed turn). Detection reads the
+  FAILED ASSISTANT TURN (the SDK throws on HTTP errors, so the response
+  status is not observable): the same classification pi uses — quota /
+  budget limits (FreeUsageLimitError, insufficient_quota…) and auth
+  errors → `blocked` with a LONG hold (30 min, the limit must reset or
+  the model must change); plain 429/5xx → `rate_limited` with a 60 s
+  hold. Switching the model (`model_select`) lifts the hold and delivers
+  the backlog immediately.
 
 ## Platform notes
 

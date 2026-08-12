@@ -16,7 +16,7 @@ import { MeshLedger } from "./ledger.js";
 import type { ExtensionAPI } from "./pi-types.js";
 import { findConflict } from "./reservations.js";
 import { registerTools, type MeshRuntime } from "./tools.js";
-import { providerErrorState } from "./provider-errors.js";
+import { providerErrorState, providerErrorStateFromMessage } from "./provider-errors.js";
 import { MeshTranscript } from "./transcript.js";
 import type { MeshFrame } from "../protocol/envelope.js";
 import type { SessionContext } from "./pi-types.js";
@@ -149,6 +149,24 @@ export default function meshExtension(pi: ExtensionAPI): void {
     let lastErrorAt = 0;
     const ERROR_COOLDOWN_MS = 30_000;
     const RATE_LIMIT_HOLD_MS = 60_000;
+    const BLOCKED_HOLD_MS = 30 * 60_000; // quota/auth: long hold, no ping-pong
+    let holdTimer: NodeJS.Timeout | null = null;
+    const startHold = (state: "rate_limited" | "blocked"): void => {
+      const holdMs = state === "rate_limited" ? RATE_LIMIT_HOLD_MS : BLOCKED_HOLD_MS;
+      rt.rateLimitedUntil = Date.now() + holdMs;
+      if (holdTimer !== null) clearTimeout(holdTimer);
+      holdTimer = setTimeout(() => {
+        holdTimer = null;
+        rt.rateLimitedUntil = undefined;
+        announce("idle");
+        try {
+          rt.flushHeld?.();
+        } catch {
+          // delivery is best effort — never break the timer
+        }
+      }, holdMs);
+      holdTimer.unref();
+    };
     const announce = (state: "busy" | "idle" | "rate_limited" | "blocked"): void => {
       if (announcedActivity === state) return;
       announcedActivity = state;
@@ -162,35 +180,42 @@ export default function meshExtension(pi: ExtensionAPI): void {
       // flips back to idle once a settle happens WITHOUT a fresh error.
       if (Date.now() - lastErrorAt > ERROR_COOLDOWN_MS) announce("idle");
     });
-    // provider error detection: the response status is the ground truth.
-    // TRANSIENT errors (429 rate limit, 408/425, 5xx) mean "retry later" —
-    // peers pause reminders. PERMANENT errors (401/403/404/…) mean the
-    // turn will not succeed by retrying — flagged blocked so peers stop
-    // poking and wait_all reports the real reason.
-    // While rate-limited, inbound frames are HELD (no injection → no burned
-    // turns) and flushed when the hold expires.
-    let holdTimer: NodeJS.Timeout | null = null;
+    // provider error detection. The GROUND TRUTH is the failed assistant
+    // turn (turn_end carries stopReason "error" + errorMessage) — the SDK
+    // throws on HTTP errors, so the response-status event never fires for
+    // them. Quota/budget limits (FreeUsageLimitError…) are PERMANENT:
+    // long hold + blocked; 429/5xx are transient: short hold + rate_limited.
+    pi.on("turn_end", (event, _ctx) => {
+      const msg = (event as { message?: { stopReason?: string; errorMessage?: string } }).message;
+      if (msg === undefined || msg.stopReason !== "error") return;
+      const state = providerErrorStateFromMessage(msg.errorMessage ?? "");
+      if (state === undefined) return;
+      lastErrorAt = Date.now();
+      announce(state);
+      startHold(state);
+    });
+    // a model/provider switch means a human intervened (e.g. the quota is
+    // exhausted) — lift the hold and deliver the backlog right away.
+    pi.on("model_select", (_event, _ctx) => {
+      if (holdTimer !== null) {
+        clearTimeout(holdTimer);
+        holdTimer = null;
+      }
+      rt.rateLimitedUntil = undefined;
+      announce("idle");
+      try {
+        rt.flushHeld?.();
+      } catch {
+        // best effort
+      }
+    });
+    // status-code fallback (fires on responses that DO carry a status)
     pi.on("after_provider_response", (event, _ctx) => {
       const state = providerErrorState((event as { status?: number }).status ?? 0);
       if (state === undefined) return;
       lastErrorAt = Date.now();
       announce(state);
-      if (state === "rate_limited") {
-        // hold inbound injections until the quota likely resets, then flush
-        rt.rateLimitedUntil = Date.now() + RATE_LIMIT_HOLD_MS;
-        if (holdTimer !== null) clearTimeout(holdTimer);
-        holdTimer = setTimeout(() => {
-          holdTimer = null;
-          rt.rateLimitedUntil = undefined;
-          announce("idle");
-          try {
-            rt.flushHeld?.();
-          } catch {
-            // delivery is best effort — never break the timer
-          }
-        }, RATE_LIMIT_HOLD_MS);
-        holdTimer.unref();
-      }
+      startHold(state);
     });
 
   // reservation enforcement: block edit/write on paths another agent
