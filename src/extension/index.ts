@@ -148,6 +148,7 @@ export default function meshExtension(pi: ExtensionAPI): void {
     let announcedActivity: "busy" | "idle" | "rate_limited" | "blocked" | null = null;
     let lastErrorAt = 0;
     const ERROR_COOLDOWN_MS = 30_000;
+    const RATE_LIMIT_HOLD_MS = 60_000;
     const announce = (state: "busy" | "idle" | "rate_limited" | "blocked"): void => {
       if (announcedActivity === state) return;
       announcedActivity = state;
@@ -166,11 +167,30 @@ export default function meshExtension(pi: ExtensionAPI): void {
     // peers pause reminders. PERMANENT errors (401/403/404/…) mean the
     // turn will not succeed by retrying — flagged blocked so peers stop
     // poking and wait_all reports the real reason.
+    // While rate-limited, inbound frames are HELD (no injection → no burned
+    // turns) and flushed when the hold expires.
+    let holdTimer: NodeJS.Timeout | null = null;
     pi.on("after_provider_response", (event, _ctx) => {
       const state = providerErrorState((event as { status?: number }).status ?? 0);
       if (state === undefined) return;
       lastErrorAt = Date.now();
       announce(state);
+      if (state === "rate_limited") {
+        // hold inbound injections until the quota likely resets, then flush
+        rt.rateLimitedUntil = Date.now() + RATE_LIMIT_HOLD_MS;
+        if (holdTimer !== null) clearTimeout(holdTimer);
+        holdTimer = setTimeout(() => {
+          holdTimer = null;
+          rt.rateLimitedUntil = undefined;
+          announce("idle");
+          try {
+            rt.flushHeld?.();
+          } catch {
+            // delivery is best effort — never break the timer
+          }
+        }, RATE_LIMIT_HOLD_MS);
+        holdTimer.unref();
+      }
     });
 
   // reservation enforcement: block edit/write on paths another agent

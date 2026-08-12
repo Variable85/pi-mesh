@@ -269,6 +269,9 @@ MESH_BROKER_URL=tcp://<machine-A>:8712 MESH_BROKER_TOKEN=change-me pi
   that burn rate-limited requests; `mesh_wait_all` says "retry later");
   PERMANENT ones (401/403/404…) flag `✖ blocked` (retrying won't heal —
   needs a human). The flag sticks for a 30 s cooldown after the last error.
+  While rate-limited, the session also HOLDS inbound injections (messages
+  and reminders are queued, nothing burns a failed turn) and delivers
+  them when the quota likely resets (60 s) — no more 429 ping-pong.
 
 ## Platform notes
 

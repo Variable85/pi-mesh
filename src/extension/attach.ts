@@ -117,8 +117,11 @@ export function attachClientListeners(
     );
   },
   );
-  client.on("inbound", (frame: MeshFrame) => {
-    if (rt === null) return; // session shutting down
+  // rate-limited hold: while the provider rejects turns (429), inbound
+  // frames are NOT injected — every injection would burn another failed
+  // turn. They are queued and delivered when the hold expires.
+  const heldFrames: MeshFrame[] = [];
+  const deliver = (frame: MeshFrame): void => {
     handleInboundSideEffects(frame, deps);
     getHud()?.noteInbound(frame); // preview: transient memory only, never persisted
     if (bypassesBatch(frame) || client.inboundBatchMs <= 0) {
@@ -128,12 +131,12 @@ export function attachClientListeners(
       });
       return;
     }
-  // while the agent is busy (sleep/long tool), the frame is HELD for
-  // the batch — show it LIVE in the conversation right now (entry outside
-  // the LLM context) so the burst is visible in real time.
-  // at most one live entry per agent per cooldown — a 30-reply burst
-  // shows a representative preview instead of flooding the conversation
-  // (the batch carries the full set at the end).
+    // while the agent is busy (sleep/long tool), the frame is HELD for
+    // the batch — show it LIVE in the conversation right now (entry outside
+    // the LLM context) so the burst is visible in real time.
+    // at most one live entry per agent per cooldown — a 30-reply burst
+    // shows a representative preview instead of flooding the conversation
+    // (the batch carries the full set at the end).
     if (rt.ctx?.isIdle?.() === false) {
       const from = frame.from ?? "";
       const last = liveCooldowns.get(from) ?? 0;
@@ -151,6 +154,19 @@ export function attachClientListeners(
       }
     }
     batcher.push(frame);
+  };
+  // flush everything queued while rate-limited (called at hold expiry)
+  rt.flushHeld = (): void => {
+    const frames = heldFrames.splice(0);
+    for (const f of frames) deliver(f);
+  };
+  client.on("inbound", (frame: MeshFrame) => {
+    if (rt === null) return; // session shutting down
+    if (rt.rateLimitedUntil !== undefined && rt.rateLimitedUntil > Date.now()) {
+      heldFrames.push(frame); // no injection while the provider rejects turns
+      return;
+    }
+    deliver(frame);
   });
   rt.batcher = batcher;
 

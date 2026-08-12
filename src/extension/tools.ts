@@ -42,6 +42,11 @@ export interface MeshRuntime {
   batcher?: { flushNow(): void };
   /** Display-only entry outside the LLM context (mesh-verdict colors). */
   appendEntry?: (type: string, data: unknown) => void;
+  /** While set (ms epoch), inbound frames are HELD, not injected — the
+   *  provider is rejecting turns (429) and every injection burns one. */
+  rateLimitedUntil?: number;
+  /** Deliver everything queued while rate-limited (called at hold expiry). */
+  flushHeld?: () => void;
   startedAt: number;
   /** inbound-path disk/injection failure counters (see index.ts). */
   ledgerFailures: number;
