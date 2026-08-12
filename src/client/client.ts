@@ -248,6 +248,8 @@ export class MeshClient extends EventEmitter {
   private static readonly READBY_DROP = 50;
   /** Latest known reservations per peer, fed by welcome/reserve broadcasts. */
   private readonly peerReservations = new Map<string, FileReservation[]>();
+  /** Phase 3: latest announced turn state per peer (activity frames). */
+  private readonly peerActivity = new Map<string, { state: "busy" | "idle"; at: string }>();
   /**
    * replyTo msgIds already answered/handled (D25): the FIRST reply to a given
    * message is consumed (pending match) or injected (orphan); later replies
@@ -447,6 +449,20 @@ export class MeshClient extends EventEmitter {
     };
   }
 
+  /** Phase 3: announce this session's turn state to the mesh (busy on
+   *  tool_call, idle on agent_settled). Fire-and-forget; the broker shares
+   *  it with room members and status snapshots. */
+  sendActivity(state: "busy" | "idle"): void {
+    if (!this.online) return;
+    const frame = buildFrame({ type: "activity", from: this.alias, status: state });
+    this.writeOrQueue(frame);
+  }
+
+  /** Phase 3: last known turn state of a peer (from snapshots/activity). */
+  activityOf(alias: string): { state: "busy" | "idle"; at: string } | undefined {
+    return this.peerActivity.get(alias);
+  }
+
   /** D34: send a read receipt for an inbound msgId back to its sender. */
   sendRead(msgId: string, to: string): void {
     if (!this.online) return;
@@ -531,7 +547,10 @@ export class MeshClient extends EventEmitter {
     // (4 pongs/min) and push real messages (msg/reply/reserve/…) out in
     // minutes, so mesh_history only showed pongs. Only frames the session
     // cares about are kept.
-    if (frame.type === "ping" || frame.type === "pong" || frame.type === "ack") return;
+    if (
+      frame.type === "ping" || frame.type === "pong" || frame.type === "ack" ||
+      frame.type === "activity" // Phase 3: turn-state noise, not history
+    ) return;
     this.transcript.push(frame);
     if (this.transcript.length > TRANSCRIPT_RING_SIZE) {
       this.transcript.splice(0, this.transcript.length - TRANSCRIPT_RING_SIZE);
@@ -690,6 +709,12 @@ export class MeshClient extends EventEmitter {
               this.attachSocket(socket, decoder);
               // D21: seed the peer reservation cache from the welcome snapshot
               for (const p of frame.peers ?? []) this.applyPeerReservations(p.alias, p.reservations);
+              // Phase 3: seed the activity cache too
+              for (const p of frame.peers ?? []) {
+                if (p.activity !== undefined && p.alias !== undefined) {
+                  this.peerActivity.set(p.alias, p.activity);
+                }
+              }
               resolve({
                 alias: this.alias,
                 rooms: frame.rooms ?? [...this.joinedRooms],
@@ -847,8 +872,19 @@ export class MeshClient extends EventEmitter {
         this.emit("read", frame);
         break;
       }
+      case "activity": {
+        // Phase 3: a peer announced busy/idle — cache it (status/HUD read it)
+        if (frame.from !== undefined && (frame.status === "busy" || frame.status === "idle")) {
+          this.peerActivity.set(frame.from, { state: frame.status, at: frame.ts });
+        }
+        this.emit("frame", frame);
+        break;
+      }
       case "presence":
-        if (frame.status === "offline") this.peerReservations.delete(frame.from ?? "");
+        if (frame.status === "offline") {
+          this.peerReservations.delete(frame.from ?? "");
+          this.peerActivity.delete(frame.from ?? ""); // gone — forget its state
+        }
         this.emit("presence", frame);
         break;
       case "pong":

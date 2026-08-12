@@ -403,19 +403,37 @@ async function execMeshStatus(
   );
   const peers = params.all === true ? snap.peers : visible;
   const localVersion = MESH_VERSION;
+  // missions FIRST: the summary line needs them (likely-done inference)
+  const missions = rt.client.missionStatus();
   const lines = [
     `mesh status — alias @${rt.client.alias}${room !== undefined ? ` room=${room}` : ""} (my rooms: ${rt.client.rooms.join(",") || "none"})`,
     `peers (${peers.length}):`,
     ...peers.map((p) => {
-      const act = computePeerStatus(p.lastSeenAt, (p.reservations?.length ?? 0) > 0, rt.client.activityIdleMs, rt.client.activityStuckMs);
-      const actTag = act.status === "active" ? "" : act.status === "stuck" ? ` ✕stuck ${act.idleFor}` : ` ○idle ${act.idleFor}`;
-      // M1: per-peer extension version; ⚠ when it differs from ours
       const v = p.clientVersion !== undefined && p.clientVersion !== "" ? ` v${p.clientVersion}` : " v?";
       const skew = p.clientVersion !== undefined && p.clientVersion !== localVersion ? " ⚠" : "";
-      return `  @${p.alias} rooms=${p.rooms.join(",")}${v}${skew}${p.since !== undefined ? ` since=${p.since}` : ""}${actTag}`;
+      const since = p.since !== undefined ? ` since=${p.since}` : "";
+      // Phase 3: announced turn state wins; heuristic (lastSeenAt) as
+      // fallback for peers that never announce (old versions)
+      if (p.activity !== undefined) {
+        const tag = p.activity.state === "busy"
+          ? " ● working"
+          : ` ○ idle (since ${localTime(p.activity.at)})`;
+        return `  @${p.alias} rooms=${p.rooms.join(",")}${v}${skew}${since}${tag}`;
+      }
+      const act = computePeerStatus(p.lastSeenAt, (p.reservations?.length ?? 0) > 0, rt.client.activityIdleMs, rt.client.activityStuckMs);
+      const actTag = act.status === "active" ? "" : act.status === "stuck" ? ` ✕stuck ${act.idleFor}` : ` ○idle ${act.idleFor}`;
+      return `  @${p.alias} rooms=${p.rooms.join(",")}${v}${skew}${since}${actTag}`;
     }),
     `mesh rooms: ${snap.rooms.length > 0 ? snap.rooms.join(", ") : "(none)"}`,
   ];
+  // Phase 3: who is likely done — idle AND no mission of ours still
+  // waiting on them (their last verdicts were all answered)
+  const summary = buildStatusSummary(peers, missions);
+  if (summary.total > 0) {
+    lines.push(
+      `summary: ${summary.working} working · ${summary.idle} idle · ${summary.stuck} stuck · ${summary.likelyDone} likely done`,
+    );
+  }
   // M2: broker counters — relayed/refused/mailbox at a glance
   if (snap.stats !== undefined) {
     const s = snap.stats;
@@ -429,7 +447,6 @@ async function execMeshStatus(
       ...receipts.map((r) => `  ${r.msgId.slice(0, 18)} → @${r.alias} at ${r.at.slice(11, 19)}`),
     );
   }
-  const missions = rt.client.missionStatus();
   if (missions.length > 0) {
     lines.push("", "missions:");
     for (const m of missions) {
@@ -498,6 +515,60 @@ const MESH_WAIT_ALL_PARAMETERS: Record<string, unknown> = {
     },
   },
 };
+
+/** Phase 3: group verdict of a status snapshot — counts by state, and
+ *  "likely done" = idle peers with NO mission of ours still waiting on
+ *  them. Pure, exported for tests. */
+export interface StatusSummary {
+  total: number;
+  working: number;
+  idle: number;
+  stuck: number;
+  likelyDone: number;
+}
+
+export function buildStatusSummary(
+  peers: { alias: string; activity?: { state: "busy" | "idle"; at: string }; reservations?: { pattern: string }[]; lastSeenAt?: string }[],
+  missions: { to: string; status: string }[],
+  idleMs = 120_000,
+  stuckMs = 900_000,
+  now = Date.now(),
+): StatusSummary {
+  const waitingOn = new Set(
+    missions.filter((m) => m.status === "waiting").map((m) => m.to),
+  );
+  let working = 0;
+  let idle = 0;
+  let stuck = 0;
+  let likelyDone = 0;
+  for (const p of peers) {
+    if (p.activity !== undefined) {
+      if (p.activity.state === "busy") {
+        working += 1;
+        continue;
+      }
+      idle += 1;
+      if (!waitingOn.has(p.alias)) likelyDone += 1;
+      continue;
+    }
+    // heuristic fallback (no announced activity)
+    const act = computePeerStatus(p.lastSeenAt, (p.reservations?.length ?? 0) > 0, idleMs, stuckMs, now);
+    if (act.status === "active") working += 1;
+    else if (act.status === "stuck") stuck += 1;
+    else {
+      idle += 1;
+      if (!waitingOn.has(p.alias)) likelyDone += 1;
+    }
+  }
+  return { total: peers.length, working, idle, stuck, likelyDone };
+}
+
+/** Local HH:MM:SS from an ISO timestamp (best effort, display only). */
+function localTime(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "??:??:??";
+  return new Date(t).toTimeString().slice(0, 8);
+}
 
 function formatElapsed(ms: number): string {
   const s = Math.floor(ms / 1000);

@@ -464,6 +464,22 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
         // online-only and silent (never acked, never mailboxed).
         routeRead(peer, frame);
         break;
+      case "activity": {
+        // Phase 3: the peer announces its turn state — stored, then shared
+        // with the members of every room it belongs to (fire-and-forget).
+        const actState: "busy" | "idle" = frame.status === "busy" ? "busy" : "idle";
+        peer.activity = { state: actState, at: new Date().toISOString() };
+        for (const roomId of peer.rooms.keys()) {
+          broadcastToRoom(
+            state,
+            roomId,
+            buildFrame({ type: "activity", from: peer.alias, status: actState, room: roomId }),
+            peer.alias,
+            sendTo,
+          );
+        }
+        break;
+      }
       case "ping":
         sendTo(peer, buildFrame({ type: "pong", id: frame.id }));
         break;

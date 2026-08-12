@@ -13,6 +13,8 @@ export interface PeerRecord {
   helloDone: boolean;
   /** File reservations declared by the peer (D21). Live with the connection. */
   reservations: FileReservation[];
+  /** Phase 3: last announced turn state (busy = a turn is running). */
+  activity?: { state: "busy" | "idle"; at: string };
 }
 
 export interface StoredMsg {

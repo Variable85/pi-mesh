@@ -123,6 +123,19 @@ export default function meshExtension(pi: ExtensionAPI): void {
 
     attachClientListeners(pi, rt, getHudRef, ctx, client, saveIdentity);
 
+    // Phase 3: announce turn state to the mesh — busy on the first tool
+    // call of a turn, idle when the whole run settles. Only on CHANGE
+    // (2 frames per turn, never spams the room).
+    let announcedActivity: "busy" | "idle" | null = null;
+    const announce = (state: "busy" | "idle"): void => {
+      if (announcedActivity === state) return;
+      announcedActivity = state;
+      client.sendActivity(state);
+    };
+    announce("idle"); // present and waiting from the start
+    pi.on("tool_call", (_event, _ctx) => announce("busy"));
+    pi.on("agent_settled", (_event, _ctx) => announce("idle"));
+
     // D21 reservation enforcement: block edit/write on paths another agent
     // has reserved. Runs FIRST (before any other tool handling); the block
     // message tells the agent who holds the reservation and why.

@@ -146,7 +146,8 @@ export type SessionEventName =
   | "session_start"
   | "session_shutdown"
   | "session_before_fork"
-  | "tool_result";
+  | "tool_result"
+  | "agent_settled"; // Phase 3: turn finished → announce idle
 
 export type SessionHookHandler = (
   event: unknown,

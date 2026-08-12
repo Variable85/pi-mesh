@@ -30,6 +30,8 @@ export interface MeshPeerInfo {
   reservations?: FileReservation[];
   /** M1: extension version (from the hello frame). */
   clientVersion?: string;
+  /** Phase 3: announced turn state (busy/idle). */
+  activity?: { state: "busy" | "idle"; at: string };
 }
 
 
@@ -91,6 +93,7 @@ export const FRAME_TYPES = [
   "read",
   "ping",
   "pong",
+  "activity",
   "error",
 ] as const;
 export type MeshFrameType = (typeof FRAME_TYPES)[number];
@@ -450,6 +453,16 @@ export function validateFrame(value: unknown, opts: ValidateOpts = {}): Validati
     const n = value[key];
     if (n !== undefined && (typeof n !== "number" || !Number.isInteger(n) || n < 0)) {
       return { ok: false, code: "invalid_frame", detail: `bad ${key}` };
+    }
+  }
+
+  // Phase 3: activity announcements — busy/idle with a valid from (rule 2)
+  if (value.type === "activity") {
+    if (value.status !== "busy" && value.status !== "idle") {
+      return { ok: false, code: "invalid_frame", detail: "bad activity status" };
+    }
+    if (typeof value.from !== "string") {
+      return { ok: false, code: "invalid_alias", detail: "activity without from" };
     }
   }
 

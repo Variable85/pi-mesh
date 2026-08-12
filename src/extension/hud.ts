@@ -257,12 +257,17 @@ export class MeshHud {
       // "@cs-room,voice" because it listed every room of the mesh.)
       rooms,
       // D27: only peers sharing a room with this session are visible.
-      // D32: stuck peers (idle long with reservations) are marked ✕.
+      // Phase 3: announced turn state first (● working / ○ idle), D32 stuck
+      // (idle long with reservations) wins over idle, heuristic fallback.
       peers: visiblePeers(this.snapshot, self, rooms).map((alias) => {
         const p = this.snapshot?.peers.find((x) => x.alias === alias);
         if (p === undefined) return alias;
         const act = computePeerStatus(p.lastSeenAt, (p.reservations?.length ?? 0) > 0, rt?.client.activityIdleMs ?? 0, rt?.client.activityStuckMs ?? 0);
-        return act.status === "stuck" ? `${alias}✕` : alias;
+        if (act.status === "stuck") return `${alias}✕`;
+        if (p.activity !== undefined) {
+          return p.activity.state === "busy" ? `${alias}●` : `${alias}○`;
+        }
+        return act.status === "idle" ? `${alias}○` : alias;
       }),
       pending: rt?.client.pendingCount ?? 0,
       transcriptOn: rt?.transcript.isEnabled() === true,

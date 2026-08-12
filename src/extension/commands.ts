@@ -1,5 +1,5 @@
 // extension/commands.ts — /mesh command (§9.3). All output via ctx.ui.notify.
-import { readFileSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { MeshClient } from "../client/client.js";
 import type { MeshRole } from "../protocol/envelope.js";
 import { loadConfig } from "../shared/config.js";
@@ -272,6 +272,44 @@ async function cmdPing(rt: MeshRuntime, ctx: SessionContext, alias: string | und
   }
 }
 
+/** Phase 3: session file size + compaction count (context pressure hint). */
+function sessionHealth(rt: MeshRuntime): { sizeMb: number; compactions: number; path: string } | null {
+  const file = rt.ctx?.sessionManager?.getSessionFile?.();
+  if (file === undefined || file === "") return null;
+  let sizeMb = 0;
+  let compactions = 0;
+  try {
+    sizeMb = statSync(file).size / 1e6;
+    // count compaction entries — streaming scan, bounded to the first MBs
+    const fd = openSync(file, "r");
+    try {
+      const CHUNK = 256 * 1024;
+      const buf = Buffer.alloc(CHUNK);
+      let pos = 0;
+      let carry = "";
+      let scanned = 0;
+      for (;;) {
+        const n = readSync(fd, buf, 0, CHUNK, pos);
+        if (n <= 0) break;
+        pos += n;
+        scanned += n;
+        const text = carry + buf.subarray(0, n).toString("utf8");
+        const lines = text.split("\n");
+        carry = lines.pop() ?? "";
+        for (const line of lines) {
+          if (line.includes('"compaction"')) compactions += 1;
+        }
+        if (scanned > 4 * 1024 * 1024) break; // good enough; never block
+      }
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+  return { sizeMb, compactions, path: file };
+}
+
 function cmdBroker(rt: MeshRuntime, ctx: SessionContext): void {
   const sock = brokerSocketPath(rt.runtimeDir);
   let lockInfo = "absent";
@@ -282,18 +320,24 @@ function cmdBroker(rt: MeshRuntime, ctx: SessionContext): void {
     // no lock file
   }
   const uptimeS = Math.floor((Date.now() - rt.startedAt) / 1000);
-  notify(
-    ctx,
-    [
-      `mesh broker:`,
-      `  version: ${MESH_VERSION}`,
-      `  socket: ${sock}`,
-      `  lock: ${lockInfo}`,
-      `  online: ${rt.client.isOnline()}`,
-      `  session uptime: ${uptimeS}s`,
-      `  inbound failures: ledger=${rt.ledgerFailures} transcript=${rt.transcriptFailures} injection=${rt.injectionFailures}`,
-    ].join("\n"),
-  );
+  const lines = [
+    `mesh broker:`,
+    `  version: ${MESH_VERSION}`,
+    `  socket: ${sock}`,
+    `  lock: ${lockInfo}`,
+    `  online: ${rt.client.isOnline()}`,
+    `  session uptime: ${uptimeS}s`,
+    `  inbound failures: ledger=${rt.ledgerFailures} transcript=${rt.transcriptFailures} injection=${rt.injectionFailures}`,
+  ];
+  // Phase 3: context pressure — a huge session means frequent compactions
+  const health = sessionHealth(rt);
+  if (health !== null) {
+    lines.push(`  session file: ${health.sizeMb.toFixed(1)} MB · ${health.compactions} compaction(s)`);
+    if (health.sizeMb > 15) {
+      lines.push(`  hint: /mesh new recommended (context pressure — identity is handed over)`);
+    }
+  }
+  notify(ctx, lines.join("\n"));
 }
 
 export function registerCommands(

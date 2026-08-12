@@ -305,6 +305,15 @@ before the call are included; already-verdict'd missions are never
 re-listed). No sleep, no polling, no `mesh_history` checks. The pattern
 is injected in the session identity context and in the skill.
 
+**Turn state + health (Phase 3)**: every session announces its turn
+state (busy on the first tool call, idle when the run settles — 2 frames
+per turn). `mesh_status` shows `● working` / `○ idle (since HH:MM:SS)` /
+`✕ stuck` per peer plus a `summary:` line with **likely done** (idle AND
+no mission of yours still waiting on them); the HUD shows the same
+markers; `mesh peers` shares the state to the whole room (agents can
+avoid busy peers). `/mesh broker` reports the session file size +
+compaction count with a `/mesh new` hint past 15 MB.
+
 **Boxed rendering (D45)**: mesh messages (simple, batches, live entries)
 are rendered INSIDE the pi custom-message box again — background
 customMessageBg (the purple frame), label `[mesh-inbound]`, padding —

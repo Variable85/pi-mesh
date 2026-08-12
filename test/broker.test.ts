@@ -474,3 +474,30 @@ describe("version + stats visibility (M1/M2)", () => {
     assert.equal(parsed.ok, false);
   });
 });
+
+describe("activity announcements (Phase 3)", () => {
+  it("busy/idle is stored and shared with room members", async (t) => {
+    const { broker, sock } = await withBroker(t);
+    const alice = trackRaw(t, await RawClient.connect(sock));
+    alice.hello("act-a");
+    await alice.waitFrame((f) => f.type === "welcome");
+    const bob = trackRaw(t, await RawClient.connect(sock));
+    bob.hello("act-b");
+    await bob.waitFrame((f) => f.type === "welcome");
+    // alice announces busy → bob must receive the activity frame
+    alice.send({ type: "activity", from: "act-a", status: "busy" });
+    const seen = await bob.waitFrame((f) => f.type === "activity" && f.from === "act-a");
+    assert.equal(seen.status, "busy");
+    // status_res carries the stored activity
+    bob.send({ type: "status_req", from: "act-b" });
+    const res = await bob.waitFrame((f) => f.type === "status_res");
+    const a = res.peers!.find((p) => p.alias === "act-a");
+    assert.equal(a?.activity?.state, "busy");
+  });
+
+  it("activity frames are validated (status busy|idle only)", () => {
+    const bad = buildFrame({ type: "activity", from: "act-x", status: "maybe" });
+    const parsed = parseFrameLine(JSON.stringify(bad));
+    assert.equal(parsed.ok, false);
+  });
+});
