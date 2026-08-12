@@ -33,7 +33,10 @@ export const DEFAULT_ROOM = "default";
 
 // ---- Rate limits (§6.6, §12 policy.rateLimits) ----
 export const DEFAULT_RATE_MSG_PER_MIN = 30;
-export const DEFAULT_RATE_URGENT_PER_MIN = 5;
+// 15/min: an orchestrator launching N agents sends one urgent each (steer) —
+// 5/min (the old default) blocked a 8-agent mission blast (rate_limited:
+// urgent). The msg bucket (30) and the duplicate window still bound spam.
+export const DEFAULT_RATE_URGENT_PER_MIN = 15;
 export const DEFAULT_RATE_FORCE_PER_MIN = 1;
 export const RATE_BUCKET_WINDOW_MS = 60_000;
 

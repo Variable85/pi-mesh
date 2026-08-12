@@ -390,3 +390,23 @@ describe("broker: B2 stale write-failure guard (T-B2)", () => {
     assert.equal(victim2.closed, false);
   });
 });
+
+  it("E15b: 8 urgent msgs to DIFFERENT targets all pass (orchestrator blast)", async (t) => {
+    const { sock } = await withBroker(t);
+    const lead = trackRaw(t, await RawClient.connect(sock));
+    lead.hello("lead");
+    await lead.waitFrame((f) => f.type === "welcome");
+    const targets = ["a", "b", "c", "d", "e", "f", "g", "h"].map((n) => `agent-${n}`);
+    for (const to of targets) {
+      const c = trackRaw(t, await RawClient.connect(sock));
+      c.hello(to);
+      await c.waitFrame((f) => f.type === "welcome");
+    }
+    for (const to of targets) {
+      lead.send({ type: "msg", from: "lead", to, body: "GO", priority: "urgent" });
+    }
+    const acks = await lead.waitFrames((f) => f.type === "ack" && f.status === "delivered", targets.length);
+    assert.equal(acks.length, targets.length, "all 8 urgencies delivered");
+    const refused = lead.frames.filter((f) => f.type === "error" && f.code === "rate_limited");
+    assert.equal(refused.length, 0);
+  });
