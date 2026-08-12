@@ -17,7 +17,7 @@ export interface InjectedInbound {
 }
 
 /** §9.1 content format: `[mesh] @from (room X, priority) body`. */
-export function formatInboundContent(frame: MeshFrame): string {
+export function formatInboundContent(frame: MeshFrame, opts: { replyChain?: boolean } = {}): string {
   const room = frame.room ?? "default";
   const priority = frame.priority ?? "normal";
   const fan = frame.broadcast === true ? ", broadcast" : frame.replyAll === true ? ", reply-all" : "";
@@ -33,9 +33,16 @@ export function formatInboundContent(frame: MeshFrame): string {
   if (frame.type === "reply") {
     // Orphan/answered reply (the original send did not awaitReply): make
     // clear this is an ANSWER to an earlier message, not a new message.
+    // D39: a reply-à-reply (target is itself a reply) is INFO ONLY — the
+    // LLM decides whether the content is worth reacting to.
+    const chain = opts.replyChain === true;
     return (
       `${prefix} reply to ${frame.replyTo ?? "?"}: ${frame.body ?? ""}` +
-      `\n↩ answer back with the mesh_reply tool using msgId "${frame.id}"` +
+      (chain
+        ? `\n↩ INFO ONLY (réponse à une réponse) : réponds UNIQUEMENT si c'est une ` +
+          `question ou une information nouvelle — JAMAIS d'accusé de réception ; ` +
+          `pour réagir, utilise mesh_send (pas mesh_reply)`
+        : `\n↩ answer back with the mesh_reply tool using msgId "${frame.id}"`) +
       (frame.replyAll === true
         ? " (this reply went to the whole room)"
         : "")
@@ -82,10 +89,10 @@ export function mapReplyDelivery(frame: MeshFrame): DeliverAs {
 export const FORCE_IDLE_POLL_MS = 50;
 export const FORCE_IDLE_MAX_MS = 3_000;
 
-function buildInboundMessage(frame: MeshFrame): InboundMessage {
+function buildInboundMessage(frame: MeshFrame, replyChain = false): InboundMessage {
   return {
     customType: "mesh-inbound",
-    content: formatInboundContent(frame),
+    content: formatInboundContent(frame, { replyChain }),
     display: true,
     details: inboundDetails(frame),
   };
@@ -102,10 +109,11 @@ export function deliverWhenIdle(
   pi: Pick<ExtensionAPI, "sendMessage">,
   ctx: SessionContext,
   frame: MeshFrame,
+  replyChain = false,
   pollMs: number = FORCE_IDLE_POLL_MS,
   maxMs: number = FORCE_IDLE_MAX_MS,
 ): void {
-  const message = buildInboundMessage(frame);
+  const message = buildInboundMessage(frame, replyChain);
   const deadline = Date.now() + maxMs;
   let sent = false;
   const trySend = (): void => {
@@ -130,9 +138,17 @@ export function injectInbound(
   pi: Pick<ExtensionAPI, "sendMessage">,
   ctx: SessionContext | null,
   frame: MeshFrame,
+  opts: { replyChain?: boolean } = {},
 ): InjectedInbound {
   const priority: MeshPriority = frame.priority ?? "normal";
-  const deliverAs = frame.type === "remind" ? "followUp" : mapReplyDelivery(frame);
+  const replyChain = opts.replyChain === true;
+  // D39: a reply-à-reply is INFO ONLY — followUp (no interruption) and the
+  // labelled content lets the LLM decide whether to react.
+  const deliverAs = frame.type === "reply" && replyChain
+    ? "followUp"
+    : frame.type === "remind"
+      ? "followUp"
+      : mapReplyDelivery(frame);
   let aborted = false;
   if (
     priority === "force" &&
@@ -147,11 +163,11 @@ export function injectInbound(
     // Defer the send until the aborted run settles: the host may purge its
     // steer queue on abort, so queueing now risks losing the message (the
     // exact bug that made 'force' unreliable during long tool calls).
-    deliverWhenIdle(pi, ctx, frame);
-    return { message: buildInboundMessage(frame), deliverAs: "steer", aborted };
+    deliverWhenIdle(pi, ctx, frame, replyChain);
+    return { message: buildInboundMessage(frame, replyChain), deliverAs: "steer", aborted };
   }
-  pi.sendMessage(buildInboundMessage(frame), { triggerTurn: true, deliverAs });
-  return { message: buildInboundMessage(frame), deliverAs, aborted };
+  pi.sendMessage(buildInboundMessage(frame, replyChain), { triggerTurn: true, deliverAs });
+  return { message: buildInboundMessage(frame, replyChain), deliverAs, aborted };
 }
 
 // ---------------------------------------------------------------------------
@@ -177,6 +193,8 @@ export interface InboundDeps {
   counters: InboundFailureCounters;
   /** D34: send a read receipt for an injected message (msg/mailbox only). */
   read?: (msgId: string, from: string) => void;
+  /** D39: tag a reply whose target is itself a reply (info-only delivery). */
+  isReplyToReply?: (replyTo: string) => boolean;
 }
 
 export function handleInboundFrame(
@@ -186,7 +204,11 @@ export function handleInboundFrame(
   deps: InboundDeps,
 ): void {
   try {
-    injectInbound(pi, ctx, frame);
+    const replyChain =
+      frame.type === "reply" &&
+      frame.replyTo !== undefined &&
+      deps.isReplyToReply?.(frame.replyTo) === true;
+    injectInbound(pi, ctx, frame, { replyChain });
   } catch {
     deps.counters.injectionFailures += 1; // one bad frame must not kill the loop (I10)
   }

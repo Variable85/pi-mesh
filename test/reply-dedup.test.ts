@@ -170,8 +170,8 @@ describe("reply dedup by content (D25 v2)", () => {
   });
 });
 
-describe("reply-to-reply dropped (D38: no ping-pong of confirmations)", () => {
-  it("a reply to an injected REPLY is dropped; a reply to a MISSION is injected", async () => {
+describe("reply-to-reply info-only (D39: the LLM judges)", () => {
+  it("a reply to a REPLY is injected with the chain flag; a reply to a MISSION is normal", async () => {
     const dirs = makeTempDirs("mesh-loop-");
     const broker = await startTestBroker(dirs.runtimeDir);
     const lead = new MeshClient({ alias: "lead", runtimeDir: dirs.runtimeDir });
@@ -191,22 +191,18 @@ describe("reply-to-reply dropped (D38: no ping-pong of confirmations)", () => {
       const injected = await withTimeout(r1P, 5000, "mission reply injected");
       assert.equal(injected.body, "MISSION TERMINÉE");
 
-      // lead répond au reply de bob (reply-à-reply) — l'envoi fonctionne
+      // lead répond au reply de bob (reply-à-reply) — livré, et bob le reçoit
+      const r2P = new Promise<MeshFrame>((resolve) => {
+        bob.once("inbound", (f: MeshFrame) => resolve(f));
+      });
       const r2 = await lead.reply(injected.id, "merci !");
       assert.equal(r2.status, "delivered");
-      // bob reçoit r2 mais D38 le DROPPE (c'est un ack-of-ack) → bob ne peut
-      // même plus y répondre → la boucle est coupée au 2e niveau.
-      const r3 = await bob.reply(r2.msgId!, "accusé reçu");
-      assert.equal(r3.status, "error");
-      assert.equal(r3.reason, "reply_without_target");
-      await new Promise((r) => setTimeout(r, 300));
-      // et lead ne reçoit AUCUN reply supplémentaire
-      let bounced = false;
-      lead.on("inbound", (f: MeshFrame) => {
-        if (f.type === "reply") bounced = true;
-      });
-      await new Promise((r) => setTimeout(r, 200));
-      assert.equal(bounced, false, "no further inbound replies (ping-pong cut)");
+      const gotR2 = await withTimeout(r2P, 5000, "bob got r2");
+      assert.equal(gotR2.type, "reply");
+      // D39: le client TAGGE le reply-à-reply pour l'extension (info-only)
+      assert.equal(bob.isReplyToReply(gotR2.replyTo ?? ""), true);
+      // le reply-à-reply de la mission n'est PAS taggé
+      assert.equal(lead.isReplyToReply(injected.replyTo ?? ""), false);
     } finally {
       await lead.close().catch(() => {});
       await bob.close().catch(() => {});

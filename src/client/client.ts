@@ -197,8 +197,7 @@ export class MeshClient extends EventEmitter {
   private ownReservations: FileReservation[] = [];
   /** D34: msgIds we sent that have been READ by peers (read receipts). */
   private readonly readBy = new Map<string, { alias: string; at: string }>();
-  /** D38: ids of replies WE sent — a reply targeting one of these is an
-   *  ack-of-ack (confirmation ping-pong) and is dropped. */
+  /** D39: ids of replies WE sent — used to tag reply-à-reply chains. */
   private readonly sentReplies = new Set<string>();
   /** Latest known reservations per peer, fed by welcome/reserve broadcasts. */
   private readonly peerReservations = new Map<string, FileReservation[]>();
@@ -239,6 +238,16 @@ export class MeshClient extends EventEmitter {
   /** D32: activity status thresholds from config. */
   get activityIdleMs(): number {
     return this.config.activityIdleMs;
+  }
+
+  /**
+   * D39: true when a reply targets ANOTHER reply (one we sent, or one we
+   * received) — i.e. a reply-à-reply (ack-of-ack chain). Such replies are
+   * injected with an info-only label in followUp mode: the LLM decides
+   * whether the content is worth reacting to, instead of a silent drop.
+   */
+  isReplyToReply(replyTo: string): boolean {
+    return this.sentReplies.has(replyTo) || this.inbox.get(replyTo)?.type === "reply";
   }
 
   /** D34: who read a msgId we sent ({alias, at}) — from read receipts. */
@@ -607,15 +616,6 @@ export class MeshClient extends EventEmitter {
           // consumed (awaitReply) or injected (orphan) — a re-send on a
           // remind. Drop it silently. Different answers to the same msgId
           // (ack then final report) are NOT duplicates and still pass.
-          this.pending.unmatchedReplyCount += 1;
-        } else if (
-          replyTo !== undefined &&
-          (this.sentReplies.has(replyTo) || this.inbox.get(replyTo)?.type === "reply")
-        ) {
-          // D38: a reply whose target is a REPLY — either one we sent
-          // (ack-of-ack) or one we received (reply-to-injected-reply) — is a
-          // confirmation-of-confirmation, the ping-pong loop. Drop it: only
-          // answers to ORIGINAL messages (missions) are surfaced.
           this.pending.unmatchedReplyCount += 1;
         } else {
           // ORPHAN reply: the sender did not awaitReply, so no pending

@@ -101,3 +101,31 @@ describe("formatInboundContent: orphan replies (the cs-room fix)", () => {
     );
   });
 });
+
+describe("reply-to-reply info-only format (D39)", () => {
+  it("labels the reply-à-reply so the LLM decides; missions stay normal", () => {
+    const chain = buildFrame({
+      type: "reply",
+      from: "agent-4",
+      to: "lead",
+      room: "cs-room",
+      replyTo: "m_reply_12345678", // targets a reply → chain
+      body: "CONFIRMÉ — preuve ligne-à-ligne fam1538",
+    });
+    const content = formatInboundContent(chain, { replyChain: true });
+    assert.ok(content.includes("INFO ONLY"), content);
+    assert.ok(content.includes("JAMAIS d'accusé de réception"), content);
+
+    const mission = buildFrame({
+      type: "reply",
+      from: "agent-4",
+      to: "lead",
+      room: "cs-room",
+      replyTo: "m_mission_1234567", // targets a mission → normal
+      body: "MISSION TERMINÉE",
+    });
+    const normal = formatInboundContent(mission, { replyChain: false });
+    assert.ok(normal.includes("answer back with the mesh_reply tool"), normal);
+    assert.ok(!normal.includes("INFO ONLY"), normal);
+  });
+});

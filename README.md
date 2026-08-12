@@ -126,12 +126,13 @@ I11) expires stale claims — the broker sweeps and notifies peers, and
 (alias, rooms, reservations) like `/mesh new` — the forked session is not
 anonymous anymore.
 
-**Reply loop cut (D38)**: a reply whose target is itself a reply
-(ack-of-ack, "accusé de réception" chains) is DROPPED — only answers to
-original messages (missions) are surfaced. Follow-up questions are plain
-`mesh_send` messages, not replies. Replies are also rate-limited now
-(same 30/min msg bucket) so a confirmation ping-pong cannot spam
-unbounded.
+**Reply-à-reply info-only (D39)**: a reply whose target is itself a reply
+(ack-of-ack chains) is still delivered, but as **followUp** (no
+interruption) with an **INFO ONLY label** — the LLM decides whether the
+content is worth reacting to (a proof, a correction), and the label says
+never to answer with an ack and to use `mesh_send` for reactions.
+Replies are rate-limited (30/min msg bucket) as a spam safety net, and
+the "déjà répondu" warning flags re-answers.
 
 **Reply handling (D25)**: replies are deduped — only the FIRST answer to a
 given msgId reaches the session (via `awaitReply` or as an injected orphan);
