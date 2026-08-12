@@ -441,6 +441,12 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
         sendAck(peer, frame.id, "ok");
         break;
       case "reply":
+        // D38: replies are messages too — rate-limit them so a
+        // confirmation ping-pong cannot spam without bound.
+        if (!checkRate(state, peer.alias, "msg", policy.rateLimits)) {
+          sendError(peer.socket, "rate_limited", frame.id);
+          break;
+        }
         if (frame.replyAll === true) routeReplyAll(peer, frame);
         else routeOnlineOnly(peer, frame, false);
         break;

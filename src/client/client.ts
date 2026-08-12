@@ -197,6 +197,9 @@ export class MeshClient extends EventEmitter {
   private ownReservations: FileReservation[] = [];
   /** D34: msgIds we sent that have been READ by peers (read receipts). */
   private readonly readBy = new Map<string, { alias: string; at: string }>();
+  /** D38: ids of replies WE sent — a reply targeting one of these is an
+   *  ack-of-ack (confirmation ping-pong) and is dropped. */
+  private readonly sentReplies = new Set<string>();
   /** Latest known reservations per peer, fed by welcome/reserve broadcasts. */
   private readonly peerReservations = new Map<string, FileReservation[]>();
   /**
@@ -605,6 +608,15 @@ export class MeshClient extends EventEmitter {
           // remind. Drop it silently. Different answers to the same msgId
           // (ack then final report) are NOT duplicates and still pass.
           this.pending.unmatchedReplyCount += 1;
+        } else if (
+          replyTo !== undefined &&
+          (this.sentReplies.has(replyTo) || this.inbox.get(replyTo)?.type === "reply")
+        ) {
+          // D38: a reply whose target is a REPLY — either one we sent
+          // (ack-of-ack) or one we received (reply-to-injected-reply) — is a
+          // confirmation-of-confirmation, the ping-pong loop. Drop it: only
+          // answers to ORIGINAL messages (missions) are surfaced.
+          this.pending.unmatchedReplyCount += 1;
         } else {
           // ORPHAN reply: the sender did not awaitReply, so no pending
           // exists — but the answer must still reach the session. Surface it
@@ -864,6 +876,11 @@ export class MeshClient extends EventEmitter {
     }
     if (ack.status === "dropped_offline") {
       return { status: "error", msgId: frame.id, reason: "dropped_offline" };
+    }
+    // D38: remember this reply id so ack-of-ack targeting it can be dropped.
+    this.sentReplies.add(frame.id);
+    if (this.sentReplies.size > 512) {
+      for (const id of this.sentReplies) this.sentReplies.delete(id);
     }
     return {
       status: "delivered",

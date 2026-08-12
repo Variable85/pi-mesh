@@ -285,7 +285,11 @@ async function execMeshReply(
     // refusal BEFORE the network call (mirrors client.reply's guard), so no
     // 'sent' record is ever ledgered for a blocked reply.
     safeLedger(rt, { event: "blocked", id: msgId, from: rt.client.alias, bodyHash, refs, code: "reply_without_target" });
-    return textResult("blocked: reply_without_target", sendDetails({ status: "blocked", reason: "reply_without_target", msgId, bodyHash }));
+    return textResult(
+      "blocked: reply_without_target — use the exact msgId from an inbound [mesh] " +
+        "message (a 'reply to m_...' reference inside a message is NOT a valid target)",
+      sendDetails({ status: "blocked", reason: "reply_without_target", msgId, bodyHash }),
+    );
   }
   // B13 causal anchoring: 'sent' is ledgered BEFORE the network call,
   // mirroring execMeshSend ordering, enriched with to/room/priority from the
@@ -300,7 +304,11 @@ async function execMeshReply(
   if (res.status === "error" && res.reason === "reply_without_target") {
     // E9 defense in depth: inbox eviction between peek and reply.
     safeLedger(rt, { event: "blocked", id: msgId, from: rt.client.alias, bodyHash, refs, code: "reply_without_target" });
-    return textResult("blocked: reply_without_target", sendDetails({ status: "blocked", reason: "reply_without_target", msgId, bodyHash }));
+    return textResult(
+      "blocked: reply_without_target — use the exact msgId from an inbound [mesh] " +
+        "message (a 'reply to m_...' reference inside a message is NOT a valid target)",
+      sendDetails({ status: "blocked", reason: "reply_without_target", msgId, bodyHash }),
+    );
   }
   if (rt.transcript.isEnabled()) {
     rt.transcript.record("out", buildFrame({

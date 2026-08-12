@@ -164,7 +164,7 @@ describe("mesh_reply ledger enrichment (to/room/priority from inbox peek)", () =
     const tools = toolRuntime(rt);
 
     const res = await execReply(tools, "m_gone_99999999", "ack");
-    assert.equal(res.content[0]!.text, "blocked: reply_without_target");
+    assert.ok(res.content[0]!.text.startsWith("blocked: reply_without_target"));
 
     // Blocked before send: reply() is never invoked.
     assert.deepEqual(stub.calls, ["peekInbox"]);

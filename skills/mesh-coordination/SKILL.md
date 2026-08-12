@@ -37,6 +37,10 @@ créer de doublons, de boucles ou de confusion.
    l'émetteur.
 5. Un **rappel (remind)** dit *"IGNORE ce rappel si tu as DÉJÀ répondu"* :
    si tu as déjà répondu, **ignore-le**.
+6. **NE RÉPONDS JAMAIS à une réponse** (reply-à-reply). Une réponse à une
+   réponse est un "accusé d'accusé" : le système la DROPPE (D38) — inutile
+   de l'envoyer, tu gaspilles des tokens. Pour poser une QUESTION DE SUIVI,
+   envoie un **nouveau message** (`mesh_send`), pas un reply.
 
 ## Anti-boucles (orchestrateur)
 

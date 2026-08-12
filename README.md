@@ -126,6 +126,13 @@ I11) expires stale claims — the broker sweeps and notifies peers, and
 (alias, rooms, reservations) like `/mesh new` — the forked session is not
 anonymous anymore.
 
+**Reply loop cut (D38)**: a reply whose target is itself a reply
+(ack-of-ack, "accusé de réception" chains) is DROPPED — only answers to
+original messages (missions) are surfaced. Follow-up questions are plain
+`mesh_send` messages, not replies. Replies are also rate-limited now
+(same 30/min msg bucket) so a confirmation ping-pong cannot spam
+unbounded.
+
 **Reply handling (D25)**: replies are deduped — only the FIRST answer to a
 given msgId reaches the session (via `awaitReply` or as an injected orphan);
 later duplicates (agents re-answering on reminds or after re-sends) are

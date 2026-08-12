@@ -169,3 +169,49 @@ describe("reply dedup by content (D25 v2)", () => {
     }
   });
 });
+
+describe("reply-to-reply dropped (D38: no ping-pong of confirmations)", () => {
+  it("a reply to an injected REPLY is dropped; a reply to a MISSION is injected", async () => {
+    const dirs = makeTempDirs("mesh-loop-");
+    const broker = await startTestBroker(dirs.runtimeDir);
+    const lead = new MeshClient({ alias: "lead", runtimeDir: dirs.runtimeDir });
+    const bob = new MeshClient({ alias: "bob", runtimeDir: dirs.runtimeDir });
+    await Promise.all([lead.connect(), bob.connect()]);
+    try {
+      // lead envoie une mission → bob répond (reply-à-mission, injecté chez lead)
+      const msgP = new Promise<MeshFrame>((resolve) => {
+        bob.once("inbound", (f: MeshFrame) => resolve(f));
+      });
+      await lead.send({ to: "bob", message: "MISSION" });
+      const mission = await withTimeout(msgP, 5000, "bob inbound");
+      const r1P = new Promise<MeshFrame>((resolve) => {
+        lead.once("inbound", (f: MeshFrame) => resolve(f));
+      });
+      const r1 = await bob.reply(mission.id, "MISSION TERMINÉE");
+      const injected = await withTimeout(r1P, 5000, "mission reply injected");
+      assert.equal(injected.body, "MISSION TERMINÉE");
+
+      // lead répond au reply de bob (reply-à-reply) — l'envoi fonctionne
+      const r2 = await lead.reply(injected.id, "merci !");
+      assert.equal(r2.status, "delivered");
+      // bob reçoit r2 mais D38 le DROPPE (c'est un ack-of-ack) → bob ne peut
+      // même plus y répondre → la boucle est coupée au 2e niveau.
+      const r3 = await bob.reply(r2.msgId!, "accusé reçu");
+      assert.equal(r3.status, "error");
+      assert.equal(r3.reason, "reply_without_target");
+      await new Promise((r) => setTimeout(r, 300));
+      // et lead ne reçoit AUCUN reply supplémentaire
+      let bounced = false;
+      lead.on("inbound", (f: MeshFrame) => {
+        if (f.type === "reply") bounced = true;
+      });
+      await new Promise((r) => setTimeout(r, 200));
+      assert.equal(bounced, false, "no further inbound replies (ping-pong cut)");
+    } finally {
+      await lead.close().catch(() => {});
+      await bob.close().catch(() => {});
+      await broker.close();
+      rmSync(dirs.root, { recursive: true, force: true });
+    }
+  });
+});
