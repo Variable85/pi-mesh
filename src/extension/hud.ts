@@ -237,11 +237,7 @@ export class MeshHud {
     const color = state.connected ? "success" : state.connecting ? "warning" : "muted";
     const peers = this.snapshot?.peers ?? [];
     return lines.map((line, i) => {
-      let l = line;
-      for (const p of peers) {
-        const c = agentColor(p.alias);
-        l = l.split(p.alias).join(theme.fg(c, p.alias));
-      }
+      const l = colorizePeerAliases(line, peers, (c, t) => theme.fg(c as never, t));
       return i === 0 ? theme.fg(color, l) : theme.fg("muted", l);
     });
   }
@@ -277,4 +273,27 @@ export class MeshHud {
       now: Date.now(),
     };
   }
+}
+
+/** Escape an alias for use inside a RegExp. */
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * B5: recolor exact alias tokens in a line — "agent-1" must NOT recolor
+ * inside "agent-10" (word boundaries = the alias charset). Pure, exported
+ * for tests.
+ */
+export function colorizePeerAliases(
+  line: string,
+  peers: { alias: string }[],
+  fg: (color: string, text: string) => string,
+): string {
+  let l = line;
+  for (const p of peers) {
+    const re = new RegExp(`(?<![a-z0-9-])${escapeRe(p.alias)}(?![a-z0-9-])`, "g");
+    l = l.replace(re, (m) => fg(agentColor(p.alias), m));
+  }
+  return l;
 }

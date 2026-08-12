@@ -45,8 +45,10 @@ export class BrokerState {
   readonly rooms = new Map<string, Set<string>>();
   readonly mailbox = new Map<string, StoredMsg[]>();
   readonly rates = new Map<string, PeerRates>();
-  /** Aliases seen at least once since broker start (mailbox eligibility, §7.7). */
-  readonly knownAliases = new Set<string>();
+  /** Aliases seen at least once since broker start (mailbox eligibility, §7.7).
+   *  B8: Map<alias, lastHelloAt> — stale aliases are pruned by the sweep
+   *  (no live peer, no mailbox, unseen > 24 h). */
+  readonly knownAliases = new Map<string, number>();
   readonly stats: BrokerStats = {
     startedAt: Date.now(),
     relayed: 0,

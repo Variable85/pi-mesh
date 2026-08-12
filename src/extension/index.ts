@@ -163,7 +163,11 @@ export default function meshExtension(pi: ExtensionAPI): void {
   // deliver every held inbound message as ONE batch, so the next LLM call
   // sees the whole lot in a single turn instead of one message per turn.
   pi.on("tool_result", async (_event, _ctx) => {
-    runtime?.batcher?.flushNow();
+    try {
+      runtime?.batcher?.flushNow();
+    } catch {
+      // B7: a send during teardown must never break the handler
+    }
   });
 
   pi.on("session_before_fork", (_event, ctx) => {
@@ -183,7 +187,13 @@ export default function meshExtension(pi: ExtensionAPI): void {
     hud = null;
     h?.detach(); // clears BOTH widget and status
     if (rt !== null) {
-      rt.batcher?.flushNow(); // D40: deliver anything still buffered
+      // D40: deliver anything still buffered — B7: pi.sendMessage may throw
+      // while the runtime is shutting down; never break session_shutdown.
+      try {
+        rt.batcher?.flushNow();
+      } catch {
+        // best effort (I10)
+      }
       // D23: persist the identity BEFORE closing — the broker purges
       // alias/rooms/reservations with the connection, and the next
       // session_start (e.g. /reload) re-loads them from disk.

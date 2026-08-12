@@ -409,7 +409,15 @@ async function execMeshStatus(
   if (missions.length > 0) {
     lines.push("", "missions:");
     for (const m of missions) {
-      lines.push(`  ${m.msgId.slice(0, 18)} → @${m.to} ${m.answered ? "✓ answered" : "✗ waiting"}`);
+      const tag =
+        m.status === "answered"
+          ? "✓ answered"
+          : m.status === "expired"
+            ? "✗ expired"
+            : m.status === "failed"
+              ? "✗ failed"
+              : "✗ waiting";
+      lines.push(`  ${m.msgId.slice(0, 18)} → @${m.to} ${tag}`);
     }
   }
   return textResult(lines.join("\n"), {
@@ -663,7 +671,7 @@ export function registerTools(pi: ExtensionAPI, getRuntime: GetRuntime): void {
     promptGuidelines:
       "Only msgIds seen in inbound [mesh] messages are valid targets. " +
       "Replies interrupt the recipient (steer). If the result warns " +
-      "If the result warns 'already replied', you already answered this msgId — do not re-answer.",
+      "'already replied', you already answered this msgId — do not re-answer.",
     parameters: MESH_REPLY_PARAMETERS,
     execute: (_toolCallId, params, _signal, _onUpdate, _ctx) => execMeshReply(getRuntime, params),
   });

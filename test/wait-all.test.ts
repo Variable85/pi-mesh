@@ -88,5 +88,23 @@ describe("waitAll (D42)", () => {
     assert.ok(silent !== undefined, "bob mission tracked as waiting");
     assert.ok(done !== undefined, "carol mission tracked as answered");
   });
+  it("missions blocked at ack are 'failed', never 'waiting' forever", async () => {
+    const res = await lead.send({ to: "ghost-peer", message: "nobody home", awaitReply: true, timeoutMs: 500 });
+    assert.equal(res.status, "blocked");
+    const m = lead.missionStatus().find((x) => x.msgId === res.msgId);
+    assert.ok(m, "mission tracked");
+    assert.equal(m!.status, "failed");
+    assert.equal(m!.answered, false);
+  });
+
+  it("missions that expire are 'expired', never 'waiting' forever", async () => {
+    const res = await lead.send({ to: "bob", message: "silent mission", awaitReply: true, timeoutMs: 300 });
+    assert.equal(res.status, "expired");
+    const m = lead.missionStatus().find((x) => x.msgId === res.msgId);
+    assert.ok(m, "mission tracked");
+    assert.equal(m!.status, "expired");
+  });
 
 });
+
+

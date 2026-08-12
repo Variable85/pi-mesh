@@ -3,8 +3,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { computePeerStatus } from "../src/client/client.js";
+import { agentColor } from "../src/extension/colors.js";
 import { updateSessionName } from "../src/extension/attach.js";
 import {
+  colorizePeerAliases,
   HUD_ACTIVITY_WINDOW_MS,
   HUD_PREVIEW_MAX,
   hudStatusText,
@@ -222,5 +224,26 @@ describe("computePeerStatus (D32)", () => {
     assert.equal(s1.status, "stuck");
     const s2 = computePeerStatus(new Date(Date.now() - 1_800_000).toISOString(), false, 120_000, 900_000);
     assert.equal(s2.status, "idle", "no reservations → idle, not stuck");
+  });
+});
+
+describe("colorizePeerAliases (B5)", () => {
+  it("colors exact alias tokens only — no partial matches inside longer aliases", () => {
+    const fg = (color: string, text: string) => `<${color}>${text}</${color}>`;
+    const out = colorizePeerAliases("peers: agent-1,agent-10,agent-2", [
+      { alias: "agent-1" },
+      { alias: "agent-2" },
+    ], fg);
+    const c1 = agentColor("agent-1");
+    const c2 = agentColor("agent-2");
+    assert.ok(out.includes(`<${c1}>agent-1</${c1}>`), "agent-1 colored");
+    assert.ok(out.includes(`<${c2}>agent-2</${c2}>`), "agent-2 colored");
+    assert.ok(out.includes("agent-10"), "agent-10 untouched (no partial recolor)");
+  });
+
+  it("colorizePeerAliases does not touch non-peer tokens", () => {
+    const fg = (color: string, text: string) => `<${color}>${text}</${color}>`;
+    const out = colorizePeerAliases("mesh ● alpha @cs-room", [{ alias: "beta" }], fg);
+    assert.equal(out, "mesh ● alpha @cs-room");
   });
 });

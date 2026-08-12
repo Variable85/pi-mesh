@@ -290,6 +290,13 @@ the turn is suspended in the tool call until all `awaitReply` missions are
 answered (or the timeout), then returns who answered (with answers) and who
 is missing. `mesh_status` lists `missions: ✓ answered / ✗ waiting`.
 
+**Hardening (D44)**: missions never stay "waiting" forever (failed/expired
+statuses in `mesh_status`), bounded mission/inbox/receipt history, leave
+broadcasts presence(offline), per-agent live-entry cooldown (1.5 s — a
+burst shows one preview instead of flooding), HUD alias recoloring with
+word boundaries, stale known aliases pruned by the broker, teardown-safe
+batch flush.
+
 **Per-agent colors + live view (D43)**: every alias gets a STABLE color
 (hash → 12-color theme palette) used everywhere — messages, batches, live
 entries and the HUD — so each agent is recognizable at a glance. While the

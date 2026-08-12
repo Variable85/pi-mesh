@@ -45,14 +45,11 @@ export function joinRoom(
 export function leaveRoom(state: BrokerState, peer: PeerRecord, roomId: string): RoomResult {
   if (!peer.rooms.has(roomId)) return { ok: false, code: "not_member" };
   peer.rooms.delete(roomId);
-  peer.rooms.delete(roomId);
   const members = state.rooms.get(roomId);
   if (members) {
     members.delete(peer.alias);
     if (members.size === 0) state.rooms.delete(roomId);
   }
-  // presence(offline-in-room) to remaining members of that room (§6.5)
-  broadcastToRoom(state, roomId, presenceFrame(peer.alias, "offline", roomId), peer.alias);
   return { ok: true };
 }
 

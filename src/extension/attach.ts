@@ -10,8 +10,13 @@ import { handleInboundSideEffects, injectInbound } from "./inbound.js";
 import type { ExtensionAPI, InboundMessage, SessionContext } from "./pi-types.js";
 import type { MeshRuntime } from "./tools.js";
 
+/** D43: live-entry previews shown while the agent is busy (B9 cooldown). */
+const LIVE_COOLDOWN_MS = 1_500;
+const liveCooldowns = new Map<string, number>();
+
 /** D31: session name keeps the first user message after the mesh identity. */
 const SESSION_NAME_MSG_MAX = 80;
+
 const SESSION_NAME_SCAN_BYTES = 256 * 1024; // first 256 KiB of the session file
 
 /**
@@ -82,6 +87,8 @@ export function attachClientListeners(
   ctx: SessionContext,
   client: import("../client/client.js").MeshClient,
   saveIdentity: (rt: MeshRuntime) => void,
+  /** B9: min gap between two live entries of the SAME agent (anti-flood). */
+  liveCooldownMs: number = LIVE_COOLDOWN_MS,
 ): void {
   const deps = {
     ledger: rt.ledger,
@@ -124,14 +131,24 @@ export function attachClientListeners(
     // D43: while the agent is busy (sleep/long tool), the frame is HELD for
     // the batch — show it LIVE in the conversation right now (entry outside
     // the LLM context) so the burst is visible in real time.
+    // B9: at most one live entry per agent per cooldown — a 30-reply burst
+    // shows a representative preview instead of flooding the conversation
+    // (the batch carries the full set at the end).
     if (rt.ctx?.isIdle?.() === false) {
-      pi.appendEntry("mesh-live", {
-        from: frame.from,
-        room: frame.room,
-        priority: frame.priority,
-        body: frame.body,
-        at: frame.ts,
-      });
+      const from = frame.from ?? "";
+      const last = liveCooldowns.get(from) ?? 0;
+      const now = Date.now();
+      if (now - last >= liveCooldownMs) {
+        liveCooldowns.set(from, now);
+        if (liveCooldowns.size > 128) liveCooldowns.clear(); // B9 bound
+        pi.appendEntry("mesh-live", {
+          from: frame.from,
+          room: frame.room,
+          priority: frame.priority,
+          body: frame.body,
+          at: frame.ts,
+        });
+      }
     }
     batcher.push(frame);
   });

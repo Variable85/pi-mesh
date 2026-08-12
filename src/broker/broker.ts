@@ -159,7 +159,8 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
     });
   };
 
-  // ---- §7.3 handlers ----
+
+// ---- §7.3 handlers ----
 
   const handleHello = (socket: Socket, frame: MeshFrame): void => {
     const alias = frame.from;
@@ -195,7 +196,7 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
       reservations: frame.reservations ?? [],
     };
     state.peers.set(alias, peer);
-    state.knownAliases.add(alias);
+    state.knownAliases.set(alias, Date.now()); // B8: (re)stamp on every hello
 
     // D21: rooms — the hello carries the client's EXACT room list. When the
     // field is present (even empty), it is authoritative: a client that
@@ -499,8 +500,20 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
           break;
         }
         const res = leaveRoom(state, peer, frame.room);
-        if (res.ok) sendAck(peer, frame.id, "ok");
-        else sendError(socket, res.code, frame.id);
+        if (res.ok) {
+          sendAck(peer, frame.id, "ok");
+          // B2: presence(offline-in-room) to the remaining members (was a
+          // silent no-op before) — peers learn the leave immediately.
+          broadcastToRoom(
+            state,
+            frame.room,
+            presenceFrame(peer.alias, "offline", frame.room),
+            peer.alias,
+            sendTo,
+          );
+        } else {
+          sendError(socket, res.code, frame.id);
+        }
         break;
       }
       default:
@@ -588,6 +601,8 @@ const server = tcp !== undefined && tcp.tls
         peer.socket.destroy(); // close event → closePeer
       }
     }
+    // B8: prune stale known aliases — mailbox eligibility only.
+    pruneStaleKnownAliases(state, now);
     // D33: expire reservations older than the configured TTL (0 = unlimited),
     // and tell the peers when something expired.
     if (config.reservationTtlMs > 0) {
@@ -635,6 +650,19 @@ const server = tcp !== undefined && tcp.tls
     if (tcp !== undefined) server.listen(tcp.port, tcp.host, onListening);
     else server.listen(sockPath, onListening);
   });
+}
+
+  /** B8: prune stale known aliases — no live peer, no mailbox, and the alias
+ *  has not re-hello'd in 24 h (mailbox eligibility only). Exported for tests. */
+export function pruneStaleKnownAliases(
+  state: BrokerState,
+  now: number = Date.now(),
+  maxAgeMs: number = 86_400_000,
+): void {
+  for (const [alias, lastHello] of [...state.knownAliases]) {
+    if (state.peers.has(alias) || state.mailbox.has(alias)) continue;
+    if (now - lastHello > maxAgeMs) state.knownAliases.delete(alias);
+  }
 }
 
 /** Purge tables + presence(offline) to former room members (§6.8 peer FSM). */

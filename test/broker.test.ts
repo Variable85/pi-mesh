@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import type { Socket } from "node:net";
 import { describe, it } from "node:test";
-import { closePeer, type RunningBroker } from "../src/broker/broker.js";
+import { closePeer, pruneStaleKnownAliases, type RunningBroker } from "../src/broker/broker.js";
 import { joinRoom } from "../src/broker/rooms.js";
 import { BrokerState, type PeerRecord } from "../src/broker/state.js";
 import { buildFrame } from "../src/protocol/envelope.js";
@@ -410,3 +410,41 @@ describe("broker: B2 stale write-failure guard (T-B2)", () => {
     const refused = lead.frames.filter((f) => f.type === "error" && f.code === "rate_limited");
     assert.equal(refused.length, 0);
   });
+
+describe("leave broadcasts presence offline (B2)", () => {
+  it("members learn the leave via presence(offline)", async (t) => {
+    const { sock } = await withBroker(t);
+    const alice = trackRaw(t, await RawClient.connect(sock));
+    alice.hello("b2-a");
+    await alice.waitFrame((f) => f.type === "welcome");
+    const bob = trackRaw(t, await RawClient.connect(sock));
+    bob.hello("b2-b");
+    await bob.waitFrame((f) => f.type === "welcome");
+    alice.send({ type: "leave", from: "b2-a", room: "default" });
+    await alice.waitFrame((f) => f.type === "ack");
+    const off = await bob.waitFrame(
+      (f) => f.type === "presence" && f.from === "b2-a" && f.status === "offline",
+    );
+    assert.equal(off.room, "default");
+  });
+});
+
+describe("stale known aliases pruned (B8)", () => {
+  it("pruneStaleKnownAliases drops aliases with no peer, no mailbox, old hello", async (t) => {
+    const { broker, sock } = await withBroker(t);
+    const alice = trackRaw(t, await RawClient.connect(sock));
+    alice.hello("b8-a");
+    await alice.waitFrame((f) => f.type === "welcome");
+    assert.ok(broker.state.knownAliases.has("b8-a"));
+    // live peer → kept even when the hello stamp is old
+    broker.state.knownAliases.set("b8-a", Date.now() - 5000);
+    pruneStaleKnownAliases(broker.state, Date.now(), 1000);
+    assert.ok(broker.state.knownAliases.has("b8-a"), "live peer keeps its alias");
+    // peer gone + stale stamp → dropped (wait for the broker to notice)
+    alice.close();
+    await waitFor(() => !broker.state.peers.has("b8-a"));
+    broker.state.knownAliases.set("b8-a", Date.now() - 5000);
+    pruneStaleKnownAliases(broker.state, Date.now(), 1000);
+    assert.ok(!broker.state.knownAliases.has("b8-a"), "stale alias dropped");
+  });
+});

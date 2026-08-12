@@ -208,11 +208,28 @@ export class MeshClient extends EventEmitter {
   private readonly readBy = new Map<string, { alias: string; at: string }>();
   /** D39: ids of replies WE sent — used to tag reply-à-reply chains. */
   private readonly sentReplies = new Set<string>();
-  /** D42: missions sent with awaitReply — who answered (for mesh_wait_all). */
+  /** D42: missions sent with awaitReply — who answered (for mesh_wait_all).
+   *  status: waiting | answered | expired | failed (B3: a mission that was
+   *  blocked/errored at ack or expired is NOT 'waiting' forever). Bounded
+   *  (B4): capped at 200 entries, oldest dropped first. */
   private readonly awaitedMissions = new Map<
     string,
-    { to: string; room: string; answered: boolean; response?: string; at?: string }
+    {
+      to: string;
+      room: string;
+      status: "waiting" | "answered" | "expired" | "failed";
+      answered: boolean;
+      response?: string;
+      at?: string;
+    }
   >();
+  /** B4: inbox/receipt/mission history caps (Map insertion order = age). */
+  private static readonly MISSION_CAP = 200;
+  private static readonly MISSION_DROP = 50;
+  private static readonly INBOX_CAP = 512;
+  private static readonly INBOX_DROP = 128;
+  private static readonly READBY_CAP = 200;
+  private static readonly READBY_DROP = 50;
   /** Latest known reservations per peer, fed by welcome/reserve broadcasts. */
   private readonly peerReservations = new Map<string, FileReservation[]>();
   /**
@@ -266,12 +283,14 @@ export class MeshClient extends EventEmitter {
 
   /** D34: who read a msgId we sent ({alias, at}) — from read receipts. */
   readsOf(msgId: string): { alias: string; at: string }[] {
+    this.pruneReadBy();
     const r = this.readBy.get(msgId);
     return r !== undefined && r.alias !== this.alias ? [{ ...r }] : [];
   }
 
   /** D34: all read receipts we hold, newest first. */
   readReceipts(limit = 5): { msgId: string; alias: string; at: string }[] {
+    this.pruneReadBy();
     return [...this.readBy.entries()]
       .reverse()
       .slice(0, limit)
@@ -289,12 +308,43 @@ export class MeshClient extends EventEmitter {
     this.awaitTargets.clear();
   }
 
-  /** Missions sent with awaitReply and their answer state. */
-  missionStatus(): { msgId: string; to: string; answered: boolean }[] {
+  /** B4: bound the awaitedMissions history (oldest dropped first). */
+  private pruneAwaitedMissions(): void {
+    while (this.awaitedMissions.size > MeshClient.MISSION_CAP) {
+      const oldest = this.awaitedMissions.keys().next().value;
+      if (oldest === undefined) break;
+      this.awaitedMissions.delete(oldest);
+    }
+  }
+
+  /** B4: bound the read-receipt store (oldest dropped first). */
+  private pruneReadBy(): void {
+    while (this.readBy.size > MeshClient.READBY_CAP) {
+      const oldest = this.readBy.keys().next().value;
+      if (oldest === undefined) break;
+      this.readBy.delete(oldest);
+    }
+  }
+
+  /** B4: bound the inbox (oldest dropped first) — reply targeting stays
+   *  reliable for recent messages; ancient ones get reply_without_target. */
+  private pruneInbox(): void {
+    while (this.inbox.size > MeshClient.INBOX_CAP) {
+      const oldest = this.inbox.keys().next().value;
+      if (oldest === undefined) break;
+      this.inbox.delete(oldest);
+    }
+  }
+
+  /** Missions sent with awaitReply and their answer state (B3: status is
+   *  honest — waiting/answered/expired/failed). */
+  missionStatus(): { msgId: string; to: string; answered: boolean; status: string }[] {
+    this.pruneAwaitedMissions();
     return [...this.awaitedMissions.entries()].map(([msgId, m]) => ({
       msgId,
       to: m.to,
       answered: m.answered,
+      status: m.status,
     }));
   }
 
@@ -689,7 +739,10 @@ export class MeshClient extends EventEmitter {
       }
       case "msg":
       case "mailbox":
-        if (frame.id) this.inbox.set(frame.id, frame);
+        if (frame.id) {
+          this.inbox.set(frame.id, frame);
+          this.pruneInbox(); // B4
+        }
         this.emit("inbound", frame);
         break;
       case "reserve": {
@@ -714,6 +767,7 @@ export class MeshClient extends EventEmitter {
             this.markReplyHandled(replyTo, body);
             const m = this.awaitedMissions.get(replyTo);
             if (m !== undefined) {
+              m.status = "answered";
               m.answered = true;
               m.response = body;
               m.at = frame.ts;
@@ -733,7 +787,10 @@ export class MeshClient extends EventEmitter {
           // replied to). Without this, mesh_reply returned "delivered" yet
           // the sender never saw the response.
           if (replyTo !== undefined) this.markReplyHandled(replyTo, body);
-          if (frame.id) this.inbox.set(frame.id, frame);
+          if (frame.id) {
+            this.inbox.set(frame.id, frame);
+            this.pruneInbox(); // B4
+          }
           this.emit("inbound", frame);
         }
         break;
@@ -875,7 +932,8 @@ export class MeshClient extends EventEmitter {
     let pendingPromise: Promise<import("./pending.js").PendingResolution> | null = null;
     if (opts.awaitReply) {
       this.awaitTargets.set(frame.id, { to: to ?? "*", room });
-      this.awaitedMissions.set(frame.id, { to: to ?? "*", room, answered: false });
+      this.awaitedMissions.set(frame.id, { to: to ?? "*", room, status: "waiting", answered: false });
+      this.pruneAwaitedMissions(); // B4
       pendingPromise = this.pending.register(frame.id, Date.now() + timeoutMs);
     }
 
@@ -888,6 +946,12 @@ export class MeshClient extends EventEmitter {
       if (opts.awaitReply) {
         this.pending.cancel(frame.id, ack.code ?? "error");
         this.awaitTargets.delete(frame.id);
+        // B3: the mission is DEAD (blocked/rate_limited/…) — never "waiting".
+        const m = this.awaitedMissions.get(frame.id);
+        if (m !== undefined) {
+          m.status = "failed";
+          m.response = ack.code ?? "error";
+        }
       }
       const code = ack.code ?? "internal";
       if (BLOCKED_CODES.has(code)) return { status: "blocked", msgId: frame.id, reason: code };
@@ -931,6 +995,9 @@ export class MeshClient extends EventEmitter {
       };
     }
     if (resolution.kind === "expired") {
+      // B3: expired missions are NOT "waiting" forever in missionStatus.
+      const m = this.awaitedMissions.get(frame.id);
+      if (m !== undefined) m.status = "expired";
       this.emit("expired", { msgId: frame.id });
       return { status: "expired", msgId: frame.id, reason: "expired" };
     }
@@ -988,9 +1055,15 @@ export class MeshClient extends EventEmitter {
       return { status: "error", msgId: frame.id, reason: "dropped_offline" };
     }
     // D38: remember this reply id so ack-of-ack targeting it can be dropped.
+    // B1: cap the set — drop the OLDEST half (insertion order), not all.
     this.sentReplies.add(frame.id);
     if (this.sentReplies.size > 512) {
-      for (const id of this.sentReplies) this.sentReplies.delete(id);
+      let dropped = 0;
+      for (const id of this.sentReplies) {
+        if (dropped >= 256) break;
+        this.sentReplies.delete(id);
+        dropped += 1;
+      }
     }
     return {
       status: "delivered",
