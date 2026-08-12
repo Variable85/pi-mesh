@@ -1,4 +1,4 @@
-// extension/inbound.ts — session injection of inbound frames (§9.1).
+// extension/inbound.ts — session injection of inbound frames.
 // normal → deliverAs followUp ; urgent → steer ; force → abort (when busy) + steer.
 // remind frames re-inject as reminder text. presence frames NEVER inject a turn
 // (they are handled via pi.appendEntry in index.ts).
@@ -16,7 +16,7 @@ export interface InjectedInbound {
   aborted: boolean;
 }
 
-/** §9.1 content format: `[mesh] @from (room X, priority, HH:MM:SS) body` —
+/** content format: `[mesh] @from (room X, priority, HH:MM:SS) body` —
  *  M4: the local arrival time is part of the prefix so bursts are
  *  chronological at a glance. */
 export function formatInboundContent(frame: MeshFrame, opts: { replyChain?: boolean } = {}): string {
@@ -34,10 +34,10 @@ export function formatInboundContent(frame: MeshFrame, opts: { replyChain?: bool
     );
   }
   if (frame.type === "reply") {
-    // Orphan/answered reply (the original send did not awaitReply): make
-    // clear this is an ANSWER to an earlier message, not a new message.
-    // D39: a reply-à-reply (target is itself a reply) is INFO ONLY — the
-    // LLM decides whether the content is worth reacting to.
+  // Orphan/answered reply (the original send did not awaitReply): make
+  // clear this is an ANSWER to an earlier message, not a new message.
+  // a reply-à-reply (target is itself a reply) is INFO ONLY — the
+  // LLM decides whether the content is worth reacting to.
     const chain = opts.replyChain === true;
     return (
       `${prefix} reply to ${frame.replyTo ?? "?"}: ${frame.body ?? ""}` +
@@ -80,13 +80,13 @@ export function inboundDetails(frame: MeshFrame): Record<string, unknown> {
   return details;
 }
 
-/** Map priority → delivery mode (§6.6/§9.1). */
+/** Map priority → delivery mode. */
 export function mapPriority(priority: MeshPriority): DeliverAs {
   return priority === "normal" ? "followUp" : "steer";
 }
 
 /**
- * D25: a reply is an ANSWER to something the session is waiting for — it
+ * a reply is an ANSWER to something the session is waiting for — it
  * must interrupt the current reflection (steer) instead of queuing until the
  * turn ends (followUp), otherwise the agent keeps working on stale context
  * and re-processes the answer later.
@@ -110,7 +110,7 @@ function buildInboundMessage(frame: MeshFrame, replyChain = false): InboundMessa
 
 /**
  * Deliver a message once the host reports idle, polling every `pollMs` up to
- * `maxMs`. Used for force: after ctx.abort() the steer queue may be purged by
+ * `maxMs`. Used for force: after ctx.abort the steer queue may be purged by
  * the host (abort is not guaranteed to preserve queued messages), so we wait
  * for the run to settle and then start a fresh turn with triggerTurn.
  * Falls back to a plain steer send when the deadline passes.
@@ -141,8 +141,8 @@ export function deliverWhenIdle(
 
 /**
  * Inject one inbound msg/mailbox/remind frame into the Pi session.
- * force: controlled abort ONLY when the host exposes abort() AND reports busy
- * (ctx.isIdle() === false), then deliver once idle. Never throws (I10).
+ * force: controlled abort ONLY when the host exposes abort AND reports busy
+ * (ctx.isIdle === false), then deliver once idle. Never throws.
  */
 export function injectInbound(
   pi: Pick<ExtensionAPI, "sendMessage">,
@@ -152,7 +152,7 @@ export function injectInbound(
 ): InjectedInbound {
   const priority: MeshPriority = frame.priority ?? "normal";
   const replyChain = opts.replyChain === true;
-  // D39: a reply-à-reply is INFO ONLY — followUp (no interruption) and the
+  // a reply-à-reply is INFO ONLY — followUp (no interruption) and the
   // labelled content lets the LLM decide whether to react.
   const deliverAs = frame.type === "reply" && replyChain
     ? "followUp"
@@ -170,9 +170,9 @@ export function injectInbound(
   ) {
     ctx.abort();
     aborted = true;
-    // Defer the send until the aborted run settles: the host may purge its
-    // steer queue on abort, so queueing now risks losing the message (the
-    // exact bug that made 'force' unreliable during long tool calls).
+  // Defer the send until the aborted run settles: the host may purge its
+  // steer queue on abort, so queueing now risks losing the message (the
+  // exact bug that made 'force' unreliable during long tool calls).
     deliverWhenIdle(pi, ctx, frame, replyChain);
     return { message: buildInboundMessage(frame, replyChain), deliverAs: "steer", aborted };
   }
@@ -181,15 +181,15 @@ export function injectInbound(
 }
 
 // ---------------------------------------------------------------------------
-// Inbound dispatch (B1): session injection is UNCONDITIONAL — it runs FIRST
+// Inbound dispatch: session injection is UNCONDITIONAL — it runs FIRST
 // and a disk failure (ENOSPC/EACCES/EROFS) in transcript/ledger can never
-// suppress it (the broker already acked delivered; I4 honest-status).
+// suppress it (the broker already acked delivered; honest-status).
 // Ledger/transcript writes are isolated in their own try/catch and failures
 // are COUNTED. An injection failure itself is also caught + counted so one
 // bad frame cannot kill the handler loop.
 // ---------------------------------------------------------------------------
 
-/** B1: failure counters for the inbound path, surfaced via /mesh broker. */
+/** failure counters for the inbound path, surfaced via /mesh broker. */
 export interface InboundFailureCounters {
   ledgerFailures: number;
   transcriptFailures: number;
@@ -201,15 +201,15 @@ export interface InboundDeps {
   transcript: { record(dir: "in" | "out", frame: MeshFrame): void };
   selfAlias: string;
   counters: InboundFailureCounters;
-  /** D34: send a read receipt for an injected message (msg/mailbox only). */
+  /** send a read receipt for an injected message (msg/mailbox only). */
   read?: (msgId: string, from: string) => void;
-  /** D39: tag a reply whose target is itself a reply (info-only delivery). */
+  /** tag a reply whose target is itself a reply (info-only delivery). */
   isReplyToReply?: (replyTo: string) => boolean;
 }
 
 /**
  * Side effects that ALWAYS run per frame (never batched): transcript,
- * ledger, read receipt, replyChain tagging. D40.
+ * ledger, read receipt, replyChain tagging..
  */
 export function handleInboundSideEffects(frame: MeshFrame, deps: InboundDeps): void {
   const replyChain =
@@ -231,16 +231,16 @@ export function handleInboundFrame(
       replyChain: (frame as unknown as { __replyChain?: boolean }).__replyChain === true,
     });
   } catch {
-    deps.counters.injectionFailures += 1; // one bad frame must not kill the loop (I10)
+    deps.counters.injectionFailures += 1; // one bad frame must not kill the loop 
   }
-  // D34: the message reached the session → honest read receipt back to the
+  // the message reached the session → honest read receipt back to the
   // sender (msg/mailbox only — replies and reminds are not 'new' messages).
   if (deps.read !== undefined && (frame.type === "msg" || frame.type === "mailbox")) {
     if (frame.id !== undefined && frame.from !== undefined) {
       try {
         deps.read(frame.id, frame.from);
       } catch {
-        // best effort — a failed receipt must never break the handler
+  // best effort — a failed receipt must never break the handler
       }
     }
   }

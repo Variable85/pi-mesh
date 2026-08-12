@@ -1,7 +1,7 @@
-// extension/transcript.ts — OPT-IN transcript with redaction (§9.6, D13).
+// extension/transcript.ts — opt-in transcript with secret redaction.
 // Off by default; on via config.transcript, MESH_TRANSCRIPT=1, or setEnabled
 // (/mesh log on|off). Bodies are stored ONLY here, after redaction + 32 KiB
-// UTF-8-safe truncation. The ledger stays hash-only even when enabled (I1).
+// UTF-8-safe truncation. The ledger stays hash-only even when enabled.
 import { appendFileSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import type { MeshFrame } from "../protocol/envelope.js";
@@ -18,7 +18,7 @@ export interface SecretPattern {
   replacement: string;
 }
 
-/** Redaction profile (§9.6 — adapted from the harness transcript-capture module). */
+/** Redaction profile. */
 export const SECRET_PATTERNS: SecretPattern[] = [
   {
     name: "private_key",
@@ -117,7 +117,7 @@ export class MeshTranscript {
     appendFileSync(this.filePath(), JSON.stringify(entry) + "\n", "utf8");
   }
 
-  /** Delete transcript day-files older than retentionDays (§9.6). Returns count removed. */
+  /** Delete transcript day-files older than retentionDays. Returns count removed. */
   pruneRetention(now: number = Date.now()): number {
     let names: string[];
     try {
@@ -136,7 +136,7 @@ export class MeshTranscript {
           unlinkSync(path.join(this.transcriptsDir(), name));
           removed += 1;
         } catch {
-          // best effort
+  // best effort
         }
       }
     }

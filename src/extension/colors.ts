@@ -1,4 +1,4 @@
-// extension/colors.ts — D43: per-agent colors. Each alias gets a STABLE
+// extension/colors.ts —: per-agent colors. Each alias gets a STABLE
 // color from the pi theme palette so agents are recognizable visually
 // everywhere (messages, batches, live entries, HUD).
 import type { ThemeColor } from "./pi-types.js";

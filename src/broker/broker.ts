@@ -1,4 +1,6 @@
-// broker/broker.ts — mesh.v1 broker server (§7). Stateless in-memory (D14).
+// broker/broker.ts — the mesh broker server: frame dispatch, rooms,
+// mailbox, rate limits, policy. Stateless in-memory (rooms/mailbox are
+// re-declared by clients at hello).
 // Run directly (`node dist/src/broker/broker.js`) or via startBroker({config, policy}) in tests.
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import net, { type Server, type Socket } from "node:net";
@@ -41,7 +43,7 @@ export interface BrokerOptions {
   config: MeshConfig;
   policy: MeshPolicy;
   socketPath?: string;
-  /** D37: TCP/TLS listen (host+port) — otherwise the unix socket is used. */
+  /** TCP/TLS listen (host+port) — otherwise the unix socket is used. */
   tcpListen?: { host: string; port: number; tls: boolean };
 }
 
@@ -54,7 +56,7 @@ export interface RunningBroker {
 
 type WriteCallback = (ok: boolean) => void;
 
-/** Bounded write (5 s, §6.1). cb(false) on timeout/error; socket destroyed. */
+/** Bounded write (5 s). cb(false) on timeout/error; socket destroyed. */
 function writeFrame(
   socket: Socket,
   frame: MeshFrame,
@@ -97,8 +99,8 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
 
   const sendTo = (peer: PeerRecord, frame: MeshFrame): void => {
     writeFrame(peer.socket, frame, config.maxFrameBytes, (ok) => {
-      // B2: identity guard — only close if this exact record is still current
-      // (the alias may have re-hello'd onto a new socket since the write).
+  // identity guard — only close if this exact record is still current
+  // (the alias may have re-hello'd onto a new socket since the write).
       if (!ok && state.peers.get(peer.alias) === peer) {
         closePeer(state, peer.alias, "write_failure");
       }
@@ -120,8 +122,8 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
     sendTo(peer, buildFrame({ type: "ack", id, status, interruptStatus, deliveredCount, totalCount }));
   };
 
-  /** D24: replyAll — fan the answer out to every ONLINE room member (except the
-   *  sender). Replies are never mailboxed (same policy as unicast replies). */
+  /** replyAll — fan the answer out to every ONLINE room member (except the
+  *  sender). Replies are never mailboxed (same policy as unicast replies). */
   const routeReplyAll = (from: PeerRecord, frame: MeshFrame): void => {
     const room = frame.room ?? DEFAULT_ROOM;
     const members = state.rooms.get(room);
@@ -160,7 +162,7 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
   };
 
 
-// ---- §7.3 handlers ----
+// ---- handlers ----
 
   const handleHello = (socket: Socket, frame: MeshFrame): void => {
     const alias = frame.from;
@@ -169,7 +171,7 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
       socket.destroy();
       return;
     }
-    // D37: tcp/tls brokers require the shared token (sha256 match)
+  // tcp/tls brokers require the shared token (sha256 match)
     if (options.tcpListen !== undefined) {
       const expected = config.brokerToken !== undefined ? sha256(config.brokerToken) : undefined;
       if (expected === undefined || frame.token !== expected) {
@@ -180,7 +182,7 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
     }
     const existing = state.peers.get(alias);
     if (existing && existing.socket !== socket && !existing.socket.destroyed) {
-      sendError(socket, "alias_taken", frame.id); // I3: same-tick refusal
+      sendError(socket, "alias_taken", frame.id); // same-tick refusal
       socket.destroy();
       return;
     }
@@ -194,20 +196,20 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
       lastSeenAt: Date.now(),
       helloDone: true,
       reservations: frame.reservations ?? [],
-      // M1: the sender's extension version (hello) — shown in snapshots
+  // M1: the sender's extension version (hello) — shown in snapshots
       clientVersion:
         typeof frame.clientVersion === "string" && frame.clientVersion.length > 0
           ? frame.clientVersion.slice(0, 64)
           : undefined,
     };
     state.peers.set(alias, peer);
-    state.knownAliases.set(alias, Date.now()); // B8: (re)stamp on every hello
+    state.knownAliases.set(alias, Date.now()); // (re)stamp on every hello
 
-    // D21: rooms — the hello carries the client's EXACT room list. When the
-    // field is present (even empty), it is authoritative: a client that
-    // left "default" must NOT be re-joined to it on every reconnect (that
-    // was the bug: "default" kept coming back after /mesh leave default).
-    // Only a legacy hello without a rooms field gets the default room.
+  // rooms — the hello carries the client's EXACT room list. When the
+  // field is present (even empty), it is authoritative: a client that
+  // left "default" must NOT be re-joined to it on every reconnect (that
+  // was the bug: "default" kept coming back after /mesh leave default).
+  // Only a legacy hello without a rooms field gets the default room.
     const requested = frame.rooms !== undefined
       ? new Set<string>(frame.rooms)
       : new Set<string>([DEFAULT_ROOM]);
@@ -235,16 +237,16 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
         mailboxCount: mailboxFrames.length,
       }),
     );
-    for (const mf of mailboxFrames) sendTo(peer, mf); // §7.7: mailbox frames right after welcome
+    for (const mf of mailboxFrames) sendTo(peer, mf); // mailbox frames right after welcome
     announceOnline(state, peer, sendTo);
-    // D21: existing peers learn the newcomer's reservations (like presence)
+  // existing peers learn the newcomer's reservations (like presence)
     if (peer.reservations.length > 0) broadcastReservations(state, peer, sendTo);
   };
 
   const routeMsg = (from: PeerRecord, frame: MeshFrame): void => {
     const to = frame.to;
     const room = frame.room ?? DEFAULT_ROOM;
-    // D24: broadcast → fan out to every room member (except the sender).
+  // broadcast → fan out to every room member (except the sender).
     if (frame.broadcast === true) {
       if (!from.rooms.has(room)) {
         state.stats.refused += 1;
@@ -253,7 +255,7 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
       }
       if (from.rooms.get(room) === "observer") {
         state.stats.refused += 1;
-        sendError(from.socket, "observer_readonly", frame.id); // E16
+        sendError(from.socket, "observer_readonly", frame.id);
         return;
       }
       const members = state.rooms.get(room);
@@ -275,7 +277,7 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
         sendError(from.socket, decision.code, frame.id);
         return;
       }
-      // deliver to every member: online → socket, offline-known → mailbox
+  // deliver to every member: online → socket, offline-known → mailbox
       const writes: Promise<boolean>[] = [];
       let total = 0;
       let queued = 0;
@@ -291,7 +293,7 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
                 if (ok) {
                   resolve(true);
                 } else {
-                  // B2: identity guard — a re-hello may have replaced the record.
+  // identity guard — a re-hello may have replaced the record.
                   if (state.peers.get(target.alias) === target) closePeer(state, target.alias, "write_failure");
                   enqueueMailbox(state, config, target.alias, frame);
                   queued += 1;
@@ -319,7 +321,7 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
       sendError(from.socket, "invalid_frame", frame.id);
       return;
     }
-    // room shared between emitter and recipient (§6.5, E18)
+  // room shared between emitter and recipient
     if (!from.rooms.has(room)) {
       state.stats.refused += 1;
       sendError(from.socket, "not_member", frame.id);
@@ -327,14 +329,14 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
     }
     if (from.rooms.get(room) === "observer") {
       state.stats.refused += 1;
-      sendError(from.socket, "observer_readonly", frame.id); // E16
+      sendError(from.socket, "observer_readonly", frame.id);
       return;
     }
     const target = state.peers.get(to);
     const knownOnline = target !== undefined && target.helloDone && !target.socket.destroyed;
     if (!knownOnline && !state.knownAliases.has(to)) {
       state.stats.refused += 1;
-      sendError(from.socket, "peer_not_found", frame.id); // E4
+      sendError(from.socket, "peer_not_found", frame.id);
       return;
     }
     if (knownOnline && target && !target.rooms.has(room)) {
@@ -343,7 +345,7 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
       return;
     }
 
-    // rate limits (E15): kind from priority
+  // rate limits: kind from priority
     const priority = frame.priority ?? "normal";
     const kind: RateKind = priority === "force" ? "force" : priority === "urgent" ? "urgent" : "msg";
     if (!checkRate(state, from.alias, kind, policy.rateLimits)) {
@@ -352,13 +354,13 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
       return;
     }
 
-    // declarative policy (D11)
+  // declarative policy
     const decision = evaluatePolicy(policy, { from: from.alias, to, room, priority });
     let routedFrame = frame;
     let interruptStatus: string | undefined;
     if (decision.action === "deny") {
       state.stats.refused += 1;
-      sendError(from.socket, decision.code, frame.id); // E14
+      sendError(from.socket, decision.code, frame.id);
       return;
     }
     if (decision.action === "downgrade") {
@@ -370,27 +372,27 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
 
     if (knownOnline && target) {
       const t = target;
-      // C5 fix: ack(delivered) ONLY after the write to the recipient socket succeeds.
+  // fix: ack(delivered) ONLY after the write to the recipient socket succeeds.
       writeFrame(t.socket, routedFrame, config.maxFrameBytes, (ok) => {
         if (ok) {
           state.stats.relayed += 1;
           sendAck(from, frame.id, "delivered", interruptStatus);
         } else {
-          // B2: identity guard — a re-hello may have replaced the record.
+  // identity guard — a re-hello may have replaced the record.
           if (state.peers.get(t.alias) === t) closePeer(state, t.alias, "write_failure");
           enqueueMailbox(state, config, t.alias, routedFrame);
           sendAck(from, frame.id, "queued_offline", interruptStatus);
         }
       });
     } else {
-      // known offline alias → mailbox, THEN ack(queued_offline) (C5/I4, E5)
+  // known offline alias → mailbox, THEN ack(queued_offline)
       enqueueMailbox(state, config, to, routedFrame);
       state.stats.relayed += 1;
       sendAck(from, frame.id, "queued_offline", interruptStatus);
     }
   };
 
-  /** D34: read receipt — deliver to the original message sender (frame.to). */
+  /** read receipt — deliver to the original message sender (frame.to). */
   const routeRead = (from: PeerRecord, frame: MeshFrame): void => {
     routeOnlineOnly(from, frame, true);
   };
@@ -405,16 +407,16 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
           state.stats.relayed += 1;
           if (!silentDrop) sendAck(from, frame.id, "delivered");
         } else {
-          // B2: identity guard — same stale-record hazard as routeMsg.
+  // identity guard — same stale-record hazard as routeMsg.
           if (state.peers.get(t.alias) === t) closePeer(state, t.alias, "write_failure");
           if (!silentDrop) sendAck(from, frame.id, "dropped_offline");
         }
       });
     } else if (!silentDrop) {
-      // replies to offline targets: explicit honest status (§8 SendResult)
+  // replies to offline targets: explicit honest status
       sendAck(from, frame.id, "dropped_offline");
     }
-    // reminds to offline targets: dropped silently (§7.3)
+  // reminds to offline targets: dropped silently
   };
 
   const dispatch = (socket: Socket, frame: MeshFrame): void => {
@@ -440,15 +442,15 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
         routeMsg(peer, frame);
         break;
       case "reserve":
-        // D21: replace the peer's reservations, broadcast the new state to
-        // every other peer (like presence), then ack the sender.
+  // replace the peer's reservations, broadcast the new state to
+  // every other peer (like presence), then ack the sender.
         peer.reservations = Array.isArray(frame.reservations) ? [...frame.reservations] : [];
         broadcastReservations(state, peer, sendTo);
         sendAck(peer, frame.id, "ok");
         break;
       case "reply":
-        // D38: replies are messages too — rate-limit them so a
-        // confirmation ping-pong cannot spam without bound.
+  // replies are messages too — rate-limit them so a
+  // confirmation ping-pong cannot spam without bound.
         if (!checkRate(state, peer.alias, "msg", policy.rateLimits)) {
           sendError(peer.socket, "rate_limited", frame.id);
           break;
@@ -460,13 +462,13 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
         routeOnlineOnly(peer, frame, true);
         break;
       case "read":
-        // D34: read receipt → routed to the ORIGINAL sender of the msgId,
-        // online-only and silent (never acked, never mailboxed).
+  // read receipt → routed to the ORIGINAL sender of the msgId,
+  // online-only and silent (never acked, never mailboxed).
         routeRead(peer, frame);
         break;
       case "activity": {
-        // Phase 3: the peer announces its turn state — stored, then shared
-        // with the members of every room it belongs to (fire-and-forget).
+  // Phase 3: the peer announces its turn state — stored, then shared
+  // with the members of every room it belongs to (fire-and-forget).
         const actState: "busy" | "idle" = frame.status === "busy" ? "busy" : "idle";
         peer.activity = { state: actState, at: new Date().toISOString() };
         for (const roomId of peer.rooms.keys()) {
@@ -492,7 +494,7 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
             id: frame.id,
             peers: peersSnapshot(state, frame.room),
             rooms: [...state.rooms.keys()],
-            // M2: broker counters ride along — relayed/refused/mailbox
+  // M2: broker counters ride along — relayed/refused/mailbox
             stats: { relayed: s.relayed, refused: s.refused, mailboxDelivered: s.mailboxDelivered, mailboxDropped: s.mailboxDropped },
           }),
         );
@@ -526,8 +528,8 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
         const res = leaveRoom(state, peer, frame.room);
         if (res.ok) {
           sendAck(peer, frame.id, "ok");
-          // B2: presence(offline-in-room) to the remaining members (was a
-          // silent no-op before) — peers learn the leave immediately.
+  // presence(offline-in-room) to the remaining members (was a
+  // silent no-op before) — peers learn the leave immediately.
           broadcastToRoom(
             state,
             frame.room,
@@ -545,7 +547,7 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
     }
   };
 
-  /** D21: broadcast one peer's full reservation state to every other peer. */
+  /** broadcast one peer's full reservation state to every other peer. */
 function broadcastReservations(
   state: BrokerState,
   peer: PeerRecord,
@@ -565,7 +567,7 @@ function broadcastReservations(
 const serverHandler = (socket: Socket): void => {
     socket.setNoDelay(true);
     const decoder = new FrameDecoder(config.maxFrameBytes);
-    // handshake bound: hello ≤ 5 s (§6.1)
+  // handshake bound: hello ≤ 5 s
     const helloTimer = setTimeout(() => {
       sendError(socket, "timeout");
       socket.destroy();
@@ -578,7 +580,7 @@ const serverHandler = (socket: Socket): void => {
         lines = decoder.push(chunk);
       } catch (err) {
         if (err instanceof FrameSizeError) {
-          sendError(socket, "oversized"); // E11: oversized + close
+          sendError(socket, "oversized"); // oversized + close
           socket.destroy();
           return;
         }
@@ -591,7 +593,7 @@ const serverHandler = (socket: Socket): void => {
           if (parsed.code === "invalid_alias" || parsed.code === "invalid_frame") continue;
           continue;
         }
-        // any valid frame clears the handshake deadline once hello done
+  // any valid frame clears the handshake deadline once hello done
         dispatch(socket, parsed.frame);
         const p = parsed.frame.from !== undefined ? state.peers.get(parsed.frame.from) : undefined;
         if (p && p.socket === socket && p.helloDone) clearTimeout(helloTimer);
@@ -617,7 +619,7 @@ const server = tcp !== undefined && tcp.tls
       )
     : net.createServer(serverHandler);
 
-  // silence sweep: destroy sockets silent > brokerSilenceMs (§7.6 — only sweep, on sockets)
+  // silence sweep: destroy sockets silent > brokerSilenceMs
   const sweep = setInterval(() => {
     const now = Date.now();
     for (const peer of [...state.peers.values()]) {
@@ -625,10 +627,10 @@ const server = tcp !== undefined && tcp.tls
         peer.socket.destroy(); // close event → closePeer
       }
     }
-    // B8: prune stale known aliases — mailbox eligibility only.
+  // prune stale known aliases — mailbox eligibility only.
     pruneStaleKnownAliases(state, now);
-    // D33: expire reservations older than the configured TTL (0 = unlimited),
-    // and tell the peers when something expired.
+  // expire reservations older than the configured TTL (0 = unlimited),
+  // and tell the peers when something expired.
     if (config.reservationTtlMs > 0) {
       for (const peer of [...state.peers.values()]) {
         const before = peer.reservations.length;
@@ -676,7 +678,7 @@ const server = tcp !== undefined && tcp.tls
   });
 }
 
-  /** B8: prune stale known aliases — no live peer, no mailbox, and the alias
+  /** prune stale known aliases — no live peer, no mailbox, and the alias
  *  has not re-hello'd in 24 h (mailbox eligibility only). Exported for tests. */
 export function pruneStaleKnownAliases(
   state: BrokerState,
@@ -689,7 +691,7 @@ export function pruneStaleKnownAliases(
   }
 }
 
-/** Purge tables + presence(offline) to former room members (§6.8 peer FSM). */
+/** Purge tables + presence(offline) to former room members. */
 export function closePeer(
   state: BrokerState,
   alias: string,
@@ -708,13 +710,13 @@ export function closePeer(
       presenceFrame(alias, "offline", roomId),
       alias,
       (p, f) => {
-        // B4: same writeFrame discipline as every other write (bounded,
-        // encoded); fire-and-forget — broadcast failures are swallowed.
+  // same writeFrame discipline as every other write (bounded,
+  // encoded); fire-and-forget — broadcast failures are swallowed.
         writeFrame(p.socket, f, maxFrameBytes, () => {});
       },
     );
   }
-  // D21: reservations live with the connection — the peer is gone, so
+  // reservations live with the connection — the peer is gone, so
   // notify the remaining peers that its reservations are void.
   if (peer.reservations.length > 0) {
     for (const p of state.peers.values()) {
@@ -728,7 +730,7 @@ export function closePeer(
   }
 }
 
-// ---- standalone main (§7.4): lock, bind, signals ----
+// ---- standalone main: lock, bind, signals ----
 
 function pidAlive(pid: number): boolean {
   try {
@@ -739,7 +741,7 @@ function pidAlive(pid: number): boolean {
   }
 }
 
-/** B3: post-write confirmation — the lock must contain OUR pid. */
+/** post-write confirmation — the lock must contain OUR pid. */
 function lockHeldByUs(lockPath: string): boolean {
   try {
     return Number(readFileSync(lockPath, "utf8").trim()) === process.pid;
@@ -748,37 +750,37 @@ function lockHeldByUs(lockPath: string): boolean {
   }
 }
 
-/** Acquire lock, stale-pid tolerant (E20). Returns false if a live broker holds it. */
+/** Acquire lock, stale-pid tolerant. Returns false if a live broker holds it. */
 export function acquireLock(dir: string): boolean {
   mkdirSync(dir, { recursive: true });
   const lockPath = brokerLockPath(dir);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       writeFileSync(lockPath, String(process.pid), { flag: "wx" });
-      // B3: wx-create is atomic, but a concurrent stale-takeover can unlink +
-      // rewrite between our write and our next step — re-read and confirm the
-      // lock carries OUR pid before proceeding; retry the loop if we lost.
+  // wx-create is atomic, but a concurrent stale-takeover can unlink +
+  // rewrite between our write and our next step — re-read and confirm the
+  // lock carries OUR pid before proceeding; retry the loop if we lost.
       if (lockHeldByUs(lockPath)) return true;
       continue;
     } catch {
-      // exists: check staleness
+  // exists: check staleness
     }
     try {
       const pid = Number(readFileSync(lockPath, "utf8").trim());
       if (Number.isInteger(pid) && pid > 0 && pid !== process.pid && pidAlive(pid)) return false;
     } catch {
-      // unreadable → treat as stale
+  // unreadable → treat as stale
     }
     try {
       unlinkSync(lockPath);
     } catch {
-      // gone already
+  // gone already
     }
   }
   return false;
 }
 
-/** B3: connect probe — true if a live broker answers on the socket path. */
+/** connect probe — true if a live broker answers on the socket path. */
 function probeSocketAlive(sockPath: string, timeoutMs = 1000): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = net.createConnection(sockPath);
@@ -807,8 +809,8 @@ export async function main(): Promise<void> {
   }
   const sockPath = brokerSocketPath(dir);
   if (existsSync(sockPath)) {
-    // B3: probe before unlink — never hijack a live broker's socket. Only a
-    // dead/stale socket path may be removed.
+  // probe before unlink — never hijack a live broker's socket. Only a
+  // dead/stale socket path may be removed.
     if (await probeSocketAlive(sockPath)) {
       process.stderr.write("mesh broker: socket path served by a live broker\n");
       process.exit(1);
@@ -816,7 +818,7 @@ export async function main(): Promise<void> {
     try {
       unlinkSync(sockPath);
     } catch {
-      // best effort
+  // best effort
     }
   }
   const config = loadConfig(sDir);
@@ -828,12 +830,12 @@ export async function main(): Promise<void> {
       try {
         unlinkSync(sockPath);
       } catch {
-        // already gone
+  // already gone
       }
       try {
         unlinkSync(brokerLockPath(dir));
       } catch {
-        // already gone
+  // already gone
       }
       process.exit(0);
     });

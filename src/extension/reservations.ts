@@ -1,5 +1,5 @@
-// extension/reservations.ts — file reservation matching (D21).
-// Pure functions, no Pi imports (I9): pattern normalization + conflict lookup
+// extension/reservations.ts — file reservation matching.
+// Pure functions, no Pi imports: pattern normalization + conflict lookup
 // against a peer→reservations map. Mirrors the old pi-mesh semantics: a
 // trailing "/" reserves a whole directory subtree, anything else is exact.
 import type { FileReservation } from "../protocol/envelope.js";
@@ -23,8 +23,8 @@ export function pathMatchesReservation(filePath: string, pattern: string): boole
 }
 
 /**
- * D33: a reservation older than ttlMs is expired and does not block anyone.
- * ttlMs 0 = unlimited (I11 default).
+ * a reservation older than ttlMs is expired and does not block anyone.
+ * ttlMs 0 = unlimited default).
  */
 export function isReservationExpired(
   reservation: FileReservation,

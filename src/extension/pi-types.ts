@@ -1,5 +1,5 @@
 // extension/pi-types.ts — minimal LOCAL interfaces for the Pi ExtensionAPI surface.
-// ZERO imports from Pi packages (I9): the extension is a thin adapter (§9).
+// ZERO imports from Pi packages: the extension is a thin adapter.
 // Tool parameters are plain JSON Schema objects (zero-dependency: NO typebox).
 
 /** JSON Schema object (plain, zero-dependency constraint). */
@@ -15,7 +15,7 @@ export interface ToolResult {
   details?: Record<string, unknown>;
 }
 
-/** Theme colors supported by the Pi TUI theme.fg (D43: full surface used
+/** Theme colors supported by the Pi TUI theme.fg: full surface used
  *  by the per-agent palette). */
 export type ThemeColor =
   | "accent"
@@ -77,25 +77,25 @@ export interface SessionContext {
     getSessionId(): string;
     getSessionFile?(): string;
   };
-  /** Pi command actions — newSession() lets /mesh new open a fresh session.
-   *  Direct method on the command context (not under actions). Post-replacement
-   *  work must go through withSession (the old ctx is stale after the call). */
+  /** Pi command actions — newSession lets /mesh new open a fresh session.
+  *  Direct method on the command context (not under actions). Post-replacement
+  *  work must go through withSession (the old ctx is stale after the call). */
   newSession?(opts?: {
     parentSession?: string;
     withSession?(ctx: SessionContext): Promise<void>;
   }): Promise<{ cancelled: boolean }>;
   ui: {
     notify(message: string, opts?: { level?: string }): void;
-    /**
-     * Footer-widget above the editor by default; undefined clears it.
-     * SAFE form ONLY: string[] (pi wraps each line in a Text component and
-     * truncates itself). The factory form is FORBIDDEN here — its return
-     * value must be a component object with render(width), not string[].
-     */
+  /**
+  * Footer-widget above the editor by default; undefined clears it.
+  * SAFE form ONLY: string[] (pi wraps each line in a Text component and
+  * truncates itself). The factory form is FORBIDDEN here — its return
+  * value must be a component object with render(width), not string[].
+  */
     setWidget(id: string, content: string[] | undefined): void;
-    /** Compact status in the built-in footer; undefined clears it. */
+  /** Compact status in the built-in footer; undefined clears it. */
     setStatus(id: string, text: string | undefined): void;
-    /** TUI theme (interactive sessions); absent in headless contexts. */
+  /** TUI theme (interactive sessions); absent in headless contexts. */
     theme?: UiTheme;
   };
   /** Request abort of the current agent turn (force priority). Optional. */
@@ -154,7 +154,7 @@ export type SessionHookHandler = (
   ctx: SessionContext,
 ) => void | Promise<void>;
 
-// ---- tool_call hook (reservation enforcement, D21) ----
+// ---- tool_call hook (reservation enforcement, ----
 
 export interface ToolCallEvent {
   toolName: string;
@@ -171,7 +171,7 @@ export type ToolCallHandler = (
   ctx: SessionContext,
 ) => ToolCallEventResult | undefined | void;
 
-/** The subset of the Pi ExtensionAPI used by the mesh extension (§9.1). */
+/** The subset of the Pi ExtensionAPI used by the mesh extension. */
 export interface ExtensionAPI {
   on(event: "tool_call", handler: ToolCallHandler): void;
   on(event: SessionEventName, handler: SessionHookHandler): void;
@@ -179,23 +179,23 @@ export interface ExtensionAPI {
   registerCommand(name: string, def: CommandDefinition): void;
   sendMessage(msg: InboundMessage, opts?: SendMessageOptions): void;
   appendEntry(customType: string, data?: unknown): void;
-  /** Session display name — shown in /resume and the session selector (D31). */
+  /** Session display name — shown in /resume and the session selector. */
   setSessionName?(name: string): void;
   getSessionName?(): string | undefined;
-  /** Register a custom renderer for CustomMessageEntry (D41: colors). */
+  /** Register a custom renderer for CustomMessageEntry: colors). */
   registerMessageRenderer?<T = unknown>(
     customType: string,
     renderer: MessageRenderer<T>,
   ): void;
   /** Register a renderer for CustomEntry — LIVE display outside the LLM
-   *  context (D43: inbound frames shown while a tool call runs). */
+  *  context: inbound frames shown while a tool call runs). */
   registerEntryRenderer?<T = unknown>(
     customType: string,
     renderer: EntryRenderer<T>,
   ): void;
 }
 
-/** Minimal local surface of pi's EntryRenderer (D43). */
+/** Minimal local surface of pi's EntryRenderer. */
 export interface EntryRenderer<T = unknown> {
   (
     entry: { customType: string; data?: T },
@@ -209,8 +209,8 @@ export interface EntryRenderer<T = unknown> {
     | undefined;
 }
 
-/** Local theme surface for renderers (D41). */
-/** Background theme colors (theme.bg surface, D45 box rendering). */
+/** Local theme surface for renderers. */
+/** Background theme colors (theme.bg surface, box rendering). */
 export type ThemeBg =
   | "selectedBg"
   | "scrollbarThumb"
@@ -222,13 +222,13 @@ export type ThemeBg =
 
 export interface RenderTheme {
   fg(color: ThemeColor, text: string): string;
-  /** D45: background application — absent in headless/test themes. */
+  /** background application — absent in headless/test themes. */
   bg?(color: ThemeBg, text: string): string;
   /** Bold helper for the box label. */
   bold?(text: string): string;
 }
 
-/** Minimal local surface of pi's MessageRenderer (D41) — a factory that
+/** Minimal local surface of pi's MessageRenderer — a factory that
  *  receives the custom message + theme and returns the render object. */
 export interface MessageRenderer<T = unknown> {
   (

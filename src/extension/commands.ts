@@ -1,4 +1,4 @@
-// extension/commands.ts — /mesh command (§9.3). All output via ctx.ui.notify.
+// extension/commands.ts — /mesh command. All output via ctx.ui.notify.
 import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { MeshClient } from "../client/client.js";
 import type { MeshRole } from "../protocol/envelope.js";
@@ -30,12 +30,12 @@ function notify(ctx: SessionContext, message: string): void {
   ctx.ui.notify(message, { level: "info" });
 }
 
-/** D23: persist alias/rooms after a mutation (join/leave/rename). */
+/** persist alias/rooms after a mutation (join/leave/rename). */
 function persistIdentity(rt: MeshRuntime): void {
   try {
     rt.identity.save(identityFromClient(rt.sessionId, rt.client));
   } catch {
-    // best effort (I10)
+  // best effort
   }
 }
 
@@ -136,9 +136,9 @@ async function cmdLeave(rt: MeshRuntime, ctx: SessionContext, room: string | und
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg === "not_member") {
-      // Honest + friendly: the broker does not know us in this room. The
-      // local joinedRooms set is resynced by client.leave() so a later
-      // reconnect does not try to rejoin it.
+  // Honest + friendly: the broker does not know us in this room. The
+  // local joinedRooms set is resynced by client.leave so a later
+  // reconnect does not try to rejoin it.
       notify(ctx, `mesh: not in room "${room}" — nothing to leave`);
     } else {
       notify(ctx, `mesh: leave failed: ${msg}`);
@@ -170,7 +170,7 @@ async function cmdNew(
   ctx: SessionContext,
   withHistory: boolean,
 ): Promise<void> {
-  // D30: /mesh new — like pi's /new (fresh conversation) but the mesh
+  // /mesh new — like pi's /new (fresh conversation) but the mesh
   // identity (alias, rooms, reservations) is handed to the NEXT session via
   // identity-pending.json; the next session_start consumes it.
   const history = withHistory
@@ -186,18 +186,18 @@ async function cmdNew(
     notify(ctx, "mesh: /mesh new requires a TUI session (newSession unavailable)");
     return;
   }
-  // The ctx becomes STALE after newSession() resolves — notify BEFORE, and
+  // The ctx becomes STALE after newSession resolves — notify BEFORE, and
   // do any post-replacement work inside withSession (fresh ctx).
   notify(ctx, `mesh: opening a new session — @${rt.client.alias} handed off (rooms/reservations kept)`);
   const res = await ctx.newSession({
     withSession: async (newCtx) => {
-      // fresh session context: report the handoff there
+  // fresh session context: report the handoff there
       try {
         newCtx.ui?.notify("mesh: identity handoff received — same alias/rooms/reservations", {
           level: "info",
         });
       } catch {
-        // best effort
+  // best effort
       }
     },
   });
@@ -212,7 +212,7 @@ async function cmdReset(
   pi: ExtensionAPI,
   getHud: () => MeshHud | null,
 ): Promise<void> {
-  // D28: like /new (fresh alias, default rooms, no reservations) but stays in
+  // like /new (fresh alias, default rooms, no reservations) but stays in
   // this pi session, like /reload does for identity preservation.
   const oldAlias = rt.client.alias;
   // 1. leave the mesh cleanly (alias/rooms/reservations purged at the broker)
@@ -232,7 +232,7 @@ async function cmdReset(
     try {
       r.identity.save(identityFromClient(r.sessionId, r.client));
     } catch {
-      // best effort (I10)
+  // best effort
     }
   });
   fresh.connect().catch(() => {
@@ -280,7 +280,7 @@ function sessionHealth(rt: MeshRuntime): { sizeMb: number; compactions: number; 
   let compactions = 0;
   try {
     sizeMb = statSync(file).size / 1e6;
-    // count compaction entries — streaming scan, bounded to the first MBs
+  // count compaction entries — streaming scan, bounded to the first MBs
     const fd = openSync(file, "r");
     try {
       const CHUNK = 256 * 1024;
@@ -317,7 +317,7 @@ function cmdBroker(rt: MeshRuntime, ctx: SessionContext): void {
     const pid = Number(readFileSync(brokerLockPath(rt.runtimeDir), "utf8").trim());
     if (Number.isFinite(pid)) lockInfo = `pid=${pid} alive=${pidAlive(pid)}`;
   } catch {
-    // no lock file
+  // no lock file
   }
   const uptimeS = Math.floor((Date.now() - rt.startedAt) / 1000);
   const lines = [
@@ -360,7 +360,7 @@ export function registerCommands(
           await cmdStatus(rt, ctx, rest[0]);
           break;
         case "join": {
-          // `/mesh join <room> [as <alias>] [observer]`
+  // `/mesh join <room> [as <alias>] [observer]`
           const parsed = parseJoinArgs(rest);
           await cmdJoin(rt, ctx, parsed.room, parsed.observer, parsed.asAlias, pi);
           onChanged?.();

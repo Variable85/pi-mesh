@@ -1,6 +1,6 @@
-// extension/renderer.ts — D41/D43/D45: colored rendering of mesh messages in
+// extension/renderer.ts — colored rendering of mesh messages in
 // the conversation, INSIDE the pi custom-message box (background
-// customMessageBg — the "purple frame" of the default rendering, D45).
+// customMessageBg — the "purple frame" of the default rendering,.
 // Per-agent colors everywhere: simple messages, batches and live entries.
 // No Pi imports except pi-tui helpers (wrap + visibleWidth).
 import { visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
@@ -9,7 +9,7 @@ import type { ThemeBg, ThemeColor } from "./pi-types.js";
 
 export interface RenderTheme {
   fg(color: ThemeColor, text: string): string;
-  /** D45: background application (theme.bg) — absent in tests/headless. */
+  /** background application (theme.bg) — absent in tests/headless. */
   bg?(color: ThemeBg, text: string): string;
   /** Bold helper (theme.bold) for the box label. */
   bold?(text: string): string;
@@ -29,7 +29,7 @@ export interface MeshInboundDetails {
   priority?: string;
 }
 
-/** Live entry payload (mesh-live, D43). */
+/** Live entry payload (mesh-live,. */
 export interface LiveEntryData {
   from?: string;
   room?: string;
@@ -39,7 +39,7 @@ export interface LiveEntryData {
 }
 
 /**
- * D45: reproduce pi's default custom-message Box — background
+ * reproduce pi's default custom-message Box — background
  * customMessageBg, padding X=1/Y=1 — around OUR colored content, so mesh
  * messages get the "purple frame" back while keeping per-agent colors.
  * Falls back to plain lines when the theme has no bg (tests/headless).
@@ -65,7 +65,7 @@ export function renderBox(
       out.push(emptyLine);
       continue;
     }
-    // wrap to the inner width (padding X=1 on both sides), then pad the rest
+  // wrap to the inner width (padding X=1 on both sides), then pad the rest
     for (const l of wrapTextWithAnsi(raw, inner)) {
       out.push(padBg(bg, l, width));
     }
@@ -110,7 +110,7 @@ export function renderMeshInbound(
   return renderBox(inner, width, theme);
 }
 
-/** Live inbound entry rendered while the agent is busy (D43). */
+/** Live inbound entry rendered while the agent is busy. */
 export function renderLiveEntry(
   data: LiveEntryData | undefined,
   width: number,

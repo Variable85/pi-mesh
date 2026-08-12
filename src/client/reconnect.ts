@@ -1,4 +1,4 @@
-// client/reconnect.ts — ensureBroker auto-spawn (§7.4), connect probe, backoff (§8).
+// client/reconnect.ts — ensureBroker auto-spawn, connect probe, backoff.
 import { fork } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import net from "node:net";
@@ -28,12 +28,12 @@ function findPackageRoot(startDir: string): string | undefined {
 }
 
 /**
- * Resolve the broker entry, in order:
+ * Resolve the broker entry, in order
  * 1. $MESH_BROKER_ENTRY override (highest priority, returned as-is).
  * 2. Sibling candidate: <moduleDir>/../broker/broker.js — only if it exists on disk.
  * 3. Repo-root fallback: nearest package.json walking up from moduleDir, then
- *    <root>/dist/src/broker/broker.js — only if it exists (covers jiti-loaded
- *    TS sources, where the sibling is broker.ts, not broker.js).
+ *  <root>/dist/src/broker/broker.js — only if it exists (covers jiti-loaded
+ *  TS sources, where the sibling is broker.ts, not broker.js).
  * 4. Otherwise throw a descriptive error listing the tried paths.
  * Never returns a path that does not exist on disk (except the explicit override).
  */
@@ -101,16 +101,16 @@ function spawnBroker(runtimeDir: string, lockPath: string, entry: string): void 
     try {
       writeFileSync(lockPath, String(child.pid));
     } catch {
-      // broker rewrites the lock itself at startup
+  // broker rewrites the lock itself at startup
     }
   }
 }
 
 /**
- * ensureBroker() (§7.4):
+ * ensureBroker
  * 1. connect OK → return.
  * 2. open(lock,"wx"): success → fork detached broker → poll connect 50ms × 60.
- *    EEXIST → pid alive ? poll wait : unlink + retry (× LOCK_RETRY_MAX).
+ *  EEXIST → pid alive ? poll wait : unlink + retry (× LOCK_RETRY_MAX).
  */
 export async function ensureBroker(runtimeDir: string): Promise<string> {
   const sockPath = brokerSocketPath(runtimeDir);
@@ -137,7 +137,7 @@ export async function ensureBroker(runtimeDir: string): Promise<string> {
         try {
           unlinkSync(lockPath);
         } catch {
-          // best effort
+  // best effort
         }
         const detail = err instanceof Error ? ` (${err.message})` : "";
         throw new Error(
@@ -145,7 +145,7 @@ export async function ensureBroker(runtimeDir: string): Promise<string> {
         );
       }
     } else {
-      // lock exists: live pid → just wait; dead pid → unlink + retry
+  // lock exists: live pid → just wait; dead pid → unlink + retry
       let pid = Number.NaN;
       try {
         pid = Number(readFileSync(lockPath, "utf8").trim());
@@ -153,34 +153,34 @@ export async function ensureBroker(runtimeDir: string): Promise<string> {
         pid = Number.NaN;
       }
       if (Number.isInteger(pid) && pid > 0 && pidAlive(pid)) {
-        // someone is spawning; fall through to poll-wait below
+  // someone is spawning; fall through to poll-wait below
       } else {
         try {
           unlinkSync(lockPath);
         } catch {
-          // already gone
+  // already gone
         }
-        continue; // stale lock (E20) → retry loop
+        continue; // stale lock  → retry loop
       }
     }
-    // poll connect 50 ms × 60 (3 s)
+  // poll connect 50 ms × 60 (3 s)
     for (let i = 0; i < ENSURE_BROKER_MAX_POLLS; i += 1) {
       await sleep(ENSURE_BROKER_POLL_MS);
       if (await connectProbe(sockPath, ENSURE_BROKER_POLL_MS)) return sockPath;
     }
-    // timed out; if we created the lock, clean it before retry
+  // timed out; if we created the lock, clean it before retry
     if (lockCreated) {
       try {
         unlinkSync(lockPath);
       } catch {
-        // best effort
+  // best effort
       }
     }
   }
   throw new Error("broker_unavailable");
 }
 
-/** Reconnect backoff: 250 ms × 2^n, capped at 5 s (§6.8 client FSM). */
+/** Reconnect backoff: 250 ms × 2^n, capped at 5 s. */
 export function backoffMs(attempt: number): number {
   const exp = RECONNECT_BASE_MS * 2 ** Math.max(0, attempt);
   return Math.min(RECONNECT_MAX_MS, exp);

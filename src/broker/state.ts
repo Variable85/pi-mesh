@@ -1,4 +1,4 @@
-// broker/state.ts — in-memory tables only (D14 stateless, I2 presence = connections).
+// broker/state.ts — in-memory tables only; presence = live connections.
 import type { Socket } from "node:net";
 import type { MeshFrame, MeshRole, FileReservation } from "../protocol/envelope.js";
 
@@ -11,7 +11,7 @@ export interface PeerRecord {
   connectedAt: number; // ms
   lastSeenAt: number; // ms — updated on every received frame
   helloDone: boolean;
-  /** File reservations declared by the peer (D21). Live with the connection. */
+  /** File reservations declared by the peer. Live with the connection. */
   reservations: FileReservation[];
   /** Phase 3: last announced turn state (busy = a turn is running). */
   activity?: { state: "busy" | "idle"; at: string };
@@ -41,15 +41,15 @@ export interface BrokerStats {
   mailboxDropped: number;
 }
 
-/** Broker state: 100% memory, rebuilt by re-hello after restart (D14). */
+/** Broker state: 100% memory, rebuilt by re-hello after restart. */
 export class BrokerState {
   readonly peers = new Map<string, PeerRecord>();
   readonly rooms = new Map<string, Set<string>>();
   readonly mailbox = new Map<string, StoredMsg[]>();
   readonly rates = new Map<string, PeerRates>();
-  /** Aliases seen at least once since broker start (mailbox eligibility, §7.7).
-   *  B8: Map<alias, lastHelloAt> — stale aliases are pruned by the sweep
-   *  (no live peer, no mailbox, unseen > 24 h). */
+  /** Aliases seen at least once since broker start (mailbox eligibility).
+  *  Map<alias, lastHelloAt> — stale aliases are pruned by the sweep
+  *  (no live peer, no mailbox, unseen > 24 h). */
   readonly knownAliases = new Map<string, number>();
   readonly stats: BrokerStats = {
     startedAt: Date.now(),

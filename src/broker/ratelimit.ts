@@ -1,4 +1,4 @@
-// broker/ratelimit.ts — token buckets (§6.6, I7/I8).
+// broker/ratelimit.ts — per-peer token buckets (msg/urgent/force).
 import {
   DEFAULT_RATE_FORCE_PER_MIN,
   DEFAULT_RATE_MSG_PER_MIN,

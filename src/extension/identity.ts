@@ -1,4 +1,4 @@
-// extension/identity.ts — mesh identity persistence (D23).
+// extension/identity.ts — mesh identity persistence.
 //
 // Problem: /reload (and pi extension reloads in general) fire
 // session_shutdown + session_start: the old MeshClient is closed (the broker
@@ -28,7 +28,7 @@ export const IDENTITY_PENDING_NAME = "identity-pending.json";
 export const IDENTITY_VERSION = 1;
 /** Persisted reservations older than this are NOT re-declared at hello. */
 export const RESERVATION_TTL_MS = 86_400_000; // 24 h
-/** D30: a /mesh new handoff is only valid for this long. */
+/** a /mesh new handoff is only valid for this long. */
 export const PENDING_TTL_MS = 900_000; // 15 min
 
 export interface PersistedIdentity {
@@ -109,28 +109,28 @@ export class MeshIdentity {
   }
 
   /**
-   * Load the identity belonging to `sessionId`. Returns null when absent,
-   * from another session, malformed, or on an older version — callers then
-   * start fresh (random alias, default rooms, no reservations).
-   */
+  * Load the identity belonging to `sessionId`. Returns null when absent,
+  * from another session, malformed, or on an older version — callers then
+  * start fresh (random alias, default rooms, no reservations).
+  */
   load(sessionId: string): PersistedIdentity | null {
     if (sessionId === "") return null;
     try {
       const raw = readFileSync(this.pathFor(sessionId), "utf8");
       return this.parse(raw, sessionId);
     } catch {
-      // fall through to the legacy single-file identity (v0.1.3-v0.1.7)
+  // fall through to the legacy single-file identity (v0.1.3-v0.1.7)
     }
     try {
       const raw = readFileSync(this.legacyPath, "utf8");
       const id = this.parse(raw, sessionId);
       if (id === null) return null;
-      // migrate: move the legacy file to the per-session file, then remove it
+  // migrate: move the legacy file to the per-session file, then remove it
       try {
         mkdirSync(this.stateDir, { recursive: true });
         renameSync(this.legacyPath, this.pathFor(sessionId));
       } catch {
-        // best effort — the legacy file may be re-read next time
+  // best effort — the legacy file may be re-read next time
       }
       return id;
     } catch {
@@ -139,30 +139,30 @@ export class MeshIdentity {
   }
 
   /**
-   * D28: factory-reset this session's identity — /mesh reset behaves like
-   * /new (fresh alias, default rooms, no reservations) while staying in the
-   * same pi session. Best effort — never throws (I10).
-   */
+  * factory-reset this session's identity — /mesh reset behaves like
+  * /new (fresh alias, default rooms, no reservations) while staying in the
+  * same pi session. Best effort — never throws.
+  */
   reset(sessionId: string): void {
     if (sessionId === "") return;
     try {
       unlinkSync(this.pathFor(sessionId));
     } catch {
-      // already gone
+  // already gone
     }
   }
 
-  // ---- D30: /mesh new identity handoff ----
+  // ---- /mesh new identity handoff ----
 
   private get pendingPath(): string {
     return path.join(this.stateDir, IDENTITY_PENDING_NAME);
   }
 
   /**
-   * Stage the current identity for the NEXT session (created by /mesh new):
-   * alias + rooms + reservations (and optionally a compact history) travel
-   * through identity-pending.json, consumed by the next session_start.
-   */
+  * Stage the current identity for the NEXT session (created by /mesh new)
+  * alias + rooms + reservations (and optionally a compact history) travel
+  * through identity-pending.json, consumed by the next session_start.
+  */
   savePending(
     identity: PersistedIdentity,
     history?: string[],
@@ -174,15 +174,15 @@ export class MeshIdentity {
       writeFileSync(tmp, JSON.stringify(payload, null, 2) + "\n", "utf8");
       renameSync(tmp, this.pendingPath);
     } catch {
-      // best effort
+  // best effort
     }
   }
 
   /**
-   * Take the staged identity (if fresh enough) and clear the file.
-   * Returns { identity, history } or null. The history is the compact
-   * transferred conversation (D30 --history flag).
-   */
+  * Take the staged identity (if fresh enough) and clear the file.
+  * Returns { identity, history } or null. The history is the compact
+  * transferred conversation --history flag).
+  */
   consumePending(now: number = Date.now()): { identity: PersistedIdentity; history?: string[] } | null {
     let raw: string;
     try {
@@ -200,7 +200,7 @@ export class MeshIdentity {
         try {
           unlinkSync(this.pendingPath); // stale handoff — drop it
         } catch {
-          // already gone
+  // already gone
         }
         return null;
       }
@@ -216,7 +216,7 @@ export class MeshIdentity {
     }
   }
 
-  /** Persist atomically (tmp + rename). Best effort — never throws (I10). */
+  /** Persist atomically (tmp + rename). Best effort — never throws. */
   save(identity: PersistedIdentity): void {
     try {
       mkdirSync(this.stateDir, { recursive: true });
@@ -225,7 +225,7 @@ export class MeshIdentity {
       writeFileSync(tmp, JSON.stringify(identity, null, 2) + "\n", "utf8");
       renameSync(tmp, target);
     } catch {
-      // best effort
+  // best effort
     }
   }
 }

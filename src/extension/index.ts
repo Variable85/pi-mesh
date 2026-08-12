@@ -1,6 +1,6 @@
-// extension/index.ts — Pi extension entrypoint (§9.1). Thin adapter: all logic
+// extension/index.ts — Pi extension entrypoint. Thin adapter: all logic
 // lives in client/; this file wires lifecycle, events, ledger and transcript.
-// I10: connect() is NON-blocking — tools answer `blocked` when the broker is down.
+// connect is NON-blocking — tools answer `blocked` when the broker is down.
 import { MeshClient, type WelcomeInfo } from "../client/client.js";
 import { loadConfig } from "../shared/config.js";
 import { runtimeDir, stateDir } from "../shared/paths.js";
@@ -28,7 +28,7 @@ export default function meshExtension(pi: ExtensionAPI): void {
   // Tools + command are registered IMMEDIATELY (they answer `blocked` offline).
   registerTools(pi, getRuntime);
   registerCommands(pi, getRuntime, () => hud?.onLocalChange(), () => hud);
-  // D43: live inbound entries rendered while a tool call runs (outside the
+  // live inbound entries rendered while a tool call runs (outside the
   // LLM context — zero tokens), so bursts are visible in real time.
   if (typeof pi.registerEntryRenderer === "function") {
     pi.registerEntryRenderer<{ from?: string; room?: string; body?: string; at?: string }>(
@@ -44,7 +44,7 @@ export default function meshExtension(pi: ExtensionAPI): void {
       }),
     );
   }
-  // D41: colored rendering of mesh messages (simple + batches).
+  // colored rendering of mesh messages (simple + batches).
   if (typeof pi.registerMessageRenderer === "function") {
     pi.registerMessageRenderer<{ kind?: string; count?: number }>(
       "mesh-inbound",
@@ -65,7 +65,7 @@ export default function meshExtension(pi: ExtensionAPI): void {
   }
 
 
-  /** Persist the current client state as this session's identity (D23). */
+  /** Persist the current client state as this session's identity. */
   const saveIdentity = (rt: MeshRuntime): void => {
     rt.identity.save(identityFromClient(rt.sessionId, rt.client));
   };
@@ -73,16 +73,16 @@ export default function meshExtension(pi: ExtensionAPI): void {
   const getHudRef = (): MeshHud | null => hud;
 
   pi.on("session_start", (_event, ctx) => {
-    const sDir = stateDir(); // <cwd>/.mesh or $MESH_STATE_DIR (D19)
+    const sDir = stateDir(); // <cwd>/.mesh or $MESH_STATE_DIR
     const rDir = runtimeDir();
     const config = loadConfig(sDir);
-    // D23: the pi sessionId is stable across /reload — reuse the persisted
-    // identity (alias, rooms, reservations) so the agent does NOT lose its
-    // mesh identity when the extension is reloaded.
+  // the pi sessionId is stable across /reload — reuse the persisted
+  // identity (alias, rooms, reservations) so the agent does NOT lose its
+  // mesh identity when the extension is reloaded.
     const sessionId = ctx.sessionManager?.getSessionId() ?? "";
     const identity = new MeshIdentity(sDir);
-    // D30: /mesh new handoff — the staged identity (alias/rooms/reservations
-    // and optionally the history) is consumed by the next session_start.
+  // /mesh new handoff — the staged identity (alias/rooms/reservations
+  // and optionally the history) is consumed by the next session_start.
     let persisted: PersistedIdentity | null = identity.load(sessionId);
     let pendingHistory: string[] | undefined;
     if (persisted === null) {
@@ -93,7 +93,7 @@ export default function meshExtension(pi: ExtensionAPI): void {
       }
     }
     const client = new MeshClient({
-      // explicit config.alias always wins; then the persisted alias; else random
+  // explicit config.alias always wins; then the persisted alias; else random
       alias: config.alias ?? persisted?.alias,
       rooms: persisted !== null && persisted.rooms.length > 0 ? persisted.rooms : config.rooms,
       initialReservations: persisted?.reservations,
@@ -123,9 +123,9 @@ export default function meshExtension(pi: ExtensionAPI): void {
 
     attachClientListeners(pi, rt, getHudRef, ctx, client, saveIdentity);
 
-    // Phase 3: announce turn state to the mesh — busy on the first tool
-    // call of a turn, idle when the whole run settles. Only on CHANGE
-    // (2 frames per turn, never spams the room).
+  // Phase 3: announce turn state to the mesh — busy on the first tool
+  // call of a turn, idle when the whole run settles. Only on CHANGE
+  // (2 frames per turn, never spams the room).
     let announcedActivity: "busy" | "idle" | null = null;
     const announce = (state: "busy" | "idle"): void => {
       if (announcedActivity === state) return;
@@ -136,9 +136,9 @@ export default function meshExtension(pi: ExtensionAPI): void {
     pi.on("tool_call", (_event, _ctx) => announce("busy"));
     pi.on("agent_settled", (_event, _ctx) => announce("idle"));
 
-    // D21 reservation enforcement: block edit/write on paths another agent
-    // has reserved. Runs FIRST (before any other tool handling); the block
-    // message tells the agent who holds the reservation and why.
+  // reservation enforcement: block edit/write on paths another agent
+  // has reserved. Runs FIRST (before any other tool handling); the block
+  // message tells the agent who holds the reservation and why.
     pi.on("tool_call", (event, _ctx) => {
       const rt = runtime;
       if (rt === null) return;
@@ -164,26 +164,26 @@ export default function meshExtension(pi: ExtensionAPI): void {
       return { block: true, reason: lines.join("\n") };
     });
 
-    // HUD above the editor: attach after runtime creation, non-blocking.
+  // HUD above the editor: attach after runtime creation, non-blocking.
     hud = new MeshHud({ getRuntime });
     hud.setConnecting(true);
     hud.attach(ctx);
 
-    // NON-blocking connect (I10): failures leave tools answering `blocked`.
+  // NON-blocking connect: failures leave tools answering `blocked`.
     client.connect().catch(() => {});
   });
 
-  // D35: a pi FORK creates a fresh session — hand the mesh identity over
+  // a pi FORK creates a fresh session — hand the mesh identity over
   // (like /mesh new, without history) so the forked session keeps alias,
   // rooms and reservations instead of starting anonymous.
-  // D40: when a tool call ends (e.g. the sleep), the busy period is over —
+  // when a tool call ends (e.g. the sleep), the busy period is over —
   // deliver every held inbound message as ONE batch, so the next LLM call
   // sees the whole lot in a single turn instead of one message per turn.
   pi.on("tool_result", async (_event, _ctx) => {
     try {
       runtime?.batcher?.flushNow();
     } catch {
-      // B7: a send during teardown must never break the handler
+  // a send during teardown must never break the handler
     }
   });
 
@@ -193,7 +193,7 @@ export default function meshExtension(pi: ExtensionAPI): void {
     try {
       rt.identity.savePending(identityFromClient(rt.sessionId, rt.client));
     } catch {
-      // best effort
+  // best effort
     }
   });
 
@@ -204,31 +204,31 @@ export default function meshExtension(pi: ExtensionAPI): void {
     hud = null;
     h?.detach(); // clears BOTH widget and status
     if (rt !== null) {
-      // D40: deliver anything still buffered — B7: pi.sendMessage may throw
-      // while the runtime is shutting down; never break session_shutdown.
+  // deliver anything still buffered —: pi.sendMessage may throw
+  // while the runtime is shutting down; never break session_shutdown.
       try {
         rt.batcher?.flushNow();
       } catch {
-        // best effort (I10)
+  // best effort
       }
-      // D23: persist the identity BEFORE closing — the broker purges
-      // alias/rooms/reservations with the connection, and the next
-      // session_start (e.g. /reload) re-loads them from disk.
+  // persist the identity BEFORE closing — the broker purges
+  // alias/rooms/reservations with the connection, and the next
+  // session_start (e.g. /reload) re-loads them from disk.
       try {
         saveIdentity(rt);
       } catch {
-        // best effort (I10)
+  // best effort
       }
-      // AWAIT the close: /reload fires session_start right after this
-      // handler, and the new client re-hellos under the same alias. If the
-      // old socket is still alive at the broker, the hello is refused with
-      // alias_taken and the session falls back to a random alias. Waiting
-      // for the socket to actually close (bounded, ≤ ACK_TIMEOUT_MS) makes
-      // the alias handover clean.
+  // AWAIT the close: /reload fires session_start right after this
+  // handler, and the new client re-hellos under the same alias. If the
+  // old socket is still alive at the broker, the hello is refused with
+  // alias_taken and the session falls back to a random alias. Waiting
+  // for the socket to actually close (bounded, ≤ ACK_TIMEOUT_MS) makes
+  // the alias handover clean.
       try {
         await rt.client.close();
       } catch {
-        // best effort
+  // best effort
       }
     }
   });

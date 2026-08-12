@@ -1,4 +1,4 @@
-// client/pending.ts — strict replyTo===msgId correlation, reminds (≤2, D8), expiry (§8).
+// client/pending.ts — strict replyTo===msgId correlation, reminds (≤2, expiry.
 import { MAX_REMINDS } from "../shared/config.js";
 import type { MeshFrame } from "../protocol/envelope.js";
 
@@ -18,8 +18,8 @@ interface PendingEntry {
 
 /**
  * Pending awaitReply tracker.
- * - correlation strict: replyTo === msgId (any other reply ignored + counted, E8)
- * - reminds at T/2 and 3T/4 via onRemind hook (client sends `remind`), max 2 (E7)
+ * - correlation strict: replyTo === msgId (any other reply ignored + counted)
+ * - reminds at T/2 and 3T/4 via onRemind hook (client sends `remind`), max 2
  * - expiry terminal at expiresAt; late reply counted, not delivered
  */
 export class PendingReplies {
@@ -40,12 +40,12 @@ export class PendingReplies {
         t.unref();
         entry.timers.push(t);
       };
-      // remind schedule: T/2 then 3T/4 (≤ MAX_REMINDS)
+  // remind schedule: T/2 then 3T/4 (≤ MAX_REMINDS)
       const fractions = [1 / 2, 3 / 4].slice(0, MAX_REMINDS);
       for (const f of fractions) {
         const delay = total * f;
-        // N3: no instant reminds — remaining time ≤ 0 (timeout 0 or past
-        // deadline) or a remind delay ≥ the expiry delay is never scheduled.
+  // no instant reminds — remaining time ≤ 0 (timeout 0 or past
+  // deadline) or a remind delay ≥ the expiry delay is never scheduled.
         if (delay <= 0 || delay >= total) continue;
         schedule(delay, () => {
           if (!this.entries.has(msgId)) return;
@@ -57,7 +57,7 @@ export class PendingReplies {
       schedule(total, () => {
         if (this.entries.delete(msgId)) {
           entry.timers.forEach(clearTimeout);
-          resolve({ kind: "expired" }); // terminal (E7)
+          resolve({ kind: "expired" }); // terminal 
         }
       });
       this.entries.set(msgId, entry);
@@ -73,7 +73,7 @@ export class PendingReplies {
     }
     const entry = this.entries.get(replyTo);
     if (!entry) {
-      this.unmatchedReplyCount += 1; // E8: ignored + counted
+      this.unmatchedReplyCount += 1; // ignored + counted
       return false;
     }
     this.entries.delete(replyTo);
@@ -94,7 +94,7 @@ export class PendingReplies {
     entry.resolve({ kind: "error", reason });
   }
 
-  /** E23: shutdown with live pendings → all resolved error{shutting_down}. */
+  /** shutdown with live pendings → all resolved error{shutting_down}. */
   cancelAll(reason: string): void {
     for (const msgId of [...this.entries.keys()]) this.cancel(msgId, reason);
   }

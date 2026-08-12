@@ -1,4 +1,4 @@
-// broker/policy.ts — declarative governance .mesh/policy.json (D11, §12).
+// broker/policy.ts — declarative governance via .mesh/policy.json.
 // Evaluated at send time; no external domain imports.
 import { readFileSync } from "node:fs";
 import type { MeshErrorCode, MeshPriority } from "../protocol/envelope.js";
@@ -59,7 +59,7 @@ function parseRules(value: unknown): PolicyRule[] {
   return rules;
 }
 
-/** Load policy from disk; missing/invalid → permissive default (I10). */
+/** Load policy from disk; missing/invalid → permissive default. */
 export function loadPolicy(stateDir?: string, env: NodeJS.ProcessEnv = process.env): MeshPolicy {
   let raw: unknown;
   try {
@@ -103,8 +103,8 @@ export type PolicyDecision =
   | { action: "deny"; code: MeshErrorCode };
 
 /**
- * Evaluate policy at send time (§7.3). Deny rules first, then allow list,
- * then force authorization (§6.6).
+ * Evaluate policy at send time. Deny rules first, then allow list,
+ * then force authorization.
  */
 export function evaluatePolicy(policy: MeshPolicy, ctx: PolicyContext): PolicyDecision {
   for (const rule of policy.deny) {

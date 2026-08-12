@@ -1,4 +1,4 @@
-// cli/mesh.ts — debug/admin CLI (§10). Ephemeral clients: alias cli-<rand6>.
+// cli/mesh.ts — debug/admin CLI. Ephemeral clients: alias cli-<rand6>.
 import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { MeshClient, type SendResult } from "../client/client.js";
@@ -88,7 +88,7 @@ async function cmdBroker(sub: string | undefined): Promise<number> {
           return 0;
         }
       } catch {
-        // no lock
+  // no lock
       }
       process.stdout.write("no live broker lock found\n");
       return 1;
@@ -99,7 +99,7 @@ async function cmdBroker(sub: string | undefined): Promise<number> {
       try {
         pid = readFileSync(brokerLockPath(dir), "utf8").trim();
       } catch {
-        // no lock
+  // no lock
       }
       process.stdout.write(`socket=${sock} reachable=${alive} lockPid=${pid}\n`);
       return alive ? 0 : 1;

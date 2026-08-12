@@ -1,5 +1,5 @@
 // extension/attach.ts — client→session wiring, shared by session_start and
-// /mesh reset (D28): both need a fully-wired MeshClient, and reset must be
+// /mesh reset: both need a fully-wired MeshClient, and reset must be
 // able to REPLACE the client in-place without a pi reload.
 import { readFileSync } from "node:fs";
 import type { WelcomeInfo } from "../client/client.js";
@@ -10,11 +10,11 @@ import { handleInboundSideEffects, injectInbound } from "./inbound.js";
 import type { ExtensionAPI, InboundMessage, SessionContext } from "./pi-types.js";
 import type { MeshRuntime } from "./tools.js";
 
-/** D43: live-entry previews shown while the agent is busy (B9 cooldown). */
+/** live-entry previews shown while the agent is busy (cooldown). */
 const LIVE_COOLDOWN_MS = 1_500;
 const liveCooldowns = new Map<string, number>();
 
-/** D31: session name keeps the first user message after the mesh identity. */
+/** session name keeps the first user message after the mesh identity. */
 const SESSION_NAME_MSG_MAX = 80;
 
 const SESSION_NAME_SCAN_BYTES = 256 * 1024; // first 256 KiB of the session file
@@ -55,7 +55,7 @@ function firstUserMessage(sessionFile: string | undefined): string | undefined {
 }
 
 /**
- * D31: name the pi session so /resume and the session selector show the mesh
+ * name the pi session so /resume and the session selector show the mesh
  * identity AND the conversation: `mesh @agent-1 · cs-room — <first message>`.
  * A user-defined name is NEVER overwritten; the mesh name is refreshed on
  * ready/rename/join/leave. The first message is kept exactly like pi's
@@ -70,7 +70,7 @@ export function updateSessionName(pi: ExtensionAPI, rt: MeshRuntime): void {
     const first = firstUserMessage(rt.ctx?.sessionManager?.getSessionFile?.());
     pi.setSessionName(`mesh @${rt.client.alias}${rooms}${first !== undefined ? ` — ${first}` : ""}`);
   } catch {
-    // best effort
+  // best effort
   }
 }
 
@@ -87,7 +87,7 @@ export function attachClientListeners(
   ctx: SessionContext,
   client: import("../client/client.js").MeshClient,
   saveIdentity: (rt: MeshRuntime) => void,
-  /** B9: min gap between two live entries of the SAME agent (anti-flood). */
+  /** min gap between two live entries of the SAME agent (anti-flood). */
   liveCooldownMs: number = LIVE_COOLDOWN_MS,
 ): void {
   const deps = {
@@ -98,7 +98,7 @@ export function attachClientListeners(
     read: (msgId: string, from: string) => client.sendRead(msgId, from),
     isReplyToReply: (replyTo: string) => client.isReplyToReply(replyTo),
   };
-  // D40: batch inbound messages over a short window → ONE injection (one
+  // batch inbound messages over a short window → ONE injection (one
   // turn) for a burst; force/remind bypass the batcher (immediate delivery).
   const batcher = new InboundBatcher(
     client.inboundBatchMs,
@@ -120,7 +120,7 @@ export function attachClientListeners(
   client.on("inbound", (frame: MeshFrame) => {
     if (rt === null) return; // session shutting down
     handleInboundSideEffects(frame, deps);
-    getHud()?.noteInbound(frame); // L2 preview: transient memory only, never persisted
+    getHud()?.noteInbound(frame); // preview: transient memory only, never persisted
     if (bypassesBatch(frame) || client.inboundBatchMs <= 0) {
       batcher.flushNow(); // deliver any pending batch first (ordering)
       injectInbound(pi, rt.ctx, frame, {
@@ -128,19 +128,19 @@ export function attachClientListeners(
       });
       return;
     }
-    // D43: while the agent is busy (sleep/long tool), the frame is HELD for
-    // the batch — show it LIVE in the conversation right now (entry outside
-    // the LLM context) so the burst is visible in real time.
-    // B9: at most one live entry per agent per cooldown — a 30-reply burst
-    // shows a representative preview instead of flooding the conversation
-    // (the batch carries the full set at the end).
+  // while the agent is busy (sleep/long tool), the frame is HELD for
+  // the batch — show it LIVE in the conversation right now (entry outside
+  // the LLM context) so the burst is visible in real time.
+  // at most one live entry per agent per cooldown — a 30-reply burst
+  // shows a representative preview instead of flooding the conversation
+  // (the batch carries the full set at the end).
     if (rt.ctx?.isIdle?.() === false) {
       const from = frame.from ?? "";
       const last = liveCooldowns.get(from) ?? 0;
       const now = Date.now();
       if (now - last >= liveCooldownMs) {
         liveCooldowns.set(from, now);
-        if (liveCooldowns.size > 128) liveCooldowns.clear(); // B9 bound
+        if (liveCooldowns.size > 128) liveCooldowns.clear(); // bound
         pi.appendEntry("mesh-live", {
           from: frame.from,
           room: frame.room,
@@ -154,7 +154,7 @@ export function attachClientListeners(
   });
   rt.batcher = batcher;
 
-  // presence → appendEntry ONLY, no turn (§9.1)
+  // presence → appendEntry ONLY, no turn
   client.on("presence", (frame: MeshFrame) => {
     pi.appendEntry("mesh", {
       kind: "mesh-presence",
@@ -169,17 +169,17 @@ export function attachClientListeners(
   client.on("ready", (welcome: WelcomeInfo) => {
     getHud()?.setConnecting(false);
     getHud()?.fetchStatus(); // fire-and-forget, never blocks session_start
-    // D31: session name for /resume (alias + rooms).
+  // session name for /resume (alias + rooms).
     updateSessionName(pi, rt);
-    // D23: persist identity as soon as we are connected (covers the very
-    // first connect AND every reconnect/rename/reset).
+  // persist identity as soon as we are connected (covers the very
+  // first connect AND every reconnect/rename/reset).
     saveIdentity(rt);
-    // D21 identity: tell the agent who it is, once per connection, so it
-    // never has to guess its alias (the old file-based mesh had agents
-    // confusing each other's identities). display:false keeps it out of
-    // the UI; triggerTurn:false avoids an extra turn. The context keeps the
-    // FULL picture: peers sharing a room are listed first, the other
-    // sessions (with their rooms) after — the agent must know who is where.
+  // identity: tell the agent who it is, once per connection, so it
+  // never has to guess its alias (the old file-based mesh had agents
+  // confusing each other's identities). display:false keeps it out of
+  // the UI; triggerTurn:false avoids an extra turn. The context keeps the
+  // FULL picture: peers sharing a room are listed first, the other
+  // sessions (with their rooms) after — the agent must know who is where.
     const roomList = (welcome.rooms.length > 0 ? welcome.rooms.join(",") : "default");
     const myRooms = new Set(roomList.split(","));
     const others = welcome.peers.filter((p) => p.alias !== client.alias);
@@ -201,11 +201,11 @@ export function attachClientListeners(
       `${peerLine}${farLine} ` +
       `mesh_send/mesh_reply to talk, mesh_status for a live snapshot, ` +
       `mesh_reserve to claim files before editing them. ` +
-      // D46: the general orchestrator pattern — launch bursts, wait_all once
+  // the general orchestrator pattern — launch bursts, wait_all once
       `Mission bursts: mesh_send(..., awaitReply: true, block: false) then ` +
       `mesh_wait_all for the group verdict — never mesh_history to check.`;
-    // D30: a /mesh new handoff may carry the previous session's history —
-    // inject it as context so the fresh conversation keeps the thread.
+  // a /mesh new handoff may carry the previous session's history —
+  // inject it as context so the fresh conversation keeps the thread.
     if (rt.pendingHistory !== undefined && rt.pendingHistory.length > 0) {
       context += `\n\n[mesh] transferred history from the previous session:\n${rt.pendingHistory.join("\n")}`;
     }
@@ -223,9 +223,9 @@ export function attachClientListeners(
     saveIdentity(rt);
   });
   client.on("alias_fallback", ({ from, to }: { from: string; to: string }) => {
-    // Another live peer holds our persisted alias (e.g. crashed session) —
-    // we took a random one; persist it so the next reload does not fight
-    // for the same alias again.
+  // Another live peer holds our persisted alias (e.g. crashed session) —
+  // we took a random one; persist it so the next reload does not fight
+  // for the same alias again.
     saveIdentity(rt);
     ctx.ui.notify(`mesh: alias @${from} taken — now connected as @${to}`, { level: "warning" });
   });

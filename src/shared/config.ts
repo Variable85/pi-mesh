@@ -1,80 +1,80 @@
-// shared/config.ts — ALL named numeric bounds (I8) + config.json/env loading (§12).
+// shared/config.ts — ALL named numeric bounds + config.json/env loading.
 // Every bound in the system is a named constant here or derived from MeshConfig.
 import { readFileSync } from "node:fs";
 import { configPath } from "./paths.js";
 
-// ---- Framing (D17, §6.1) ----
+// ---- Framing) ----
 export const DEFAULT_MAX_FRAME_BYTES = 65_536; // 64 KiB
 export const HARD_MIN_FRAME_BYTES = 1_024;
 export const HARD_MAX_FRAME_BYTES = 1_048_576; // 1 MiB
-export const MAX_BODY_BYTES = 32_768; // 32 KiB (§6.2 rule 4)
+export const MAX_BODY_BYTES = 32_768; // 32 KiB 
 export const MAX_FRAME_ID_CHARS = 64;
 export const MAX_REFS = 8;
 export const MAX_REF_CHARS = 256;
 
-// ---- Timeouts (§6.1) ----
+// ---- Timeouts ----
 export const HELLO_TIMEOUT_MS = 5_000;
 export const WRITE_TIMEOUT_MS = 5_000;
-export const DEFAULT_HEARTBEAT_MS = 15_000; // client ping (D16)
-export const DEFAULT_BROKER_SILENCE_MS = 45_000; // broker cutoff (D16)
-export const SWEEP_INTERVAL_MS = 15_000; // broker silence sweep (§7.6)
+export const DEFAULT_HEARTBEAT_MS = 15_000; // client ping 
+export const DEFAULT_BROKER_SILENCE_MS = 45_000; // broker cutoff 
+export const SWEEP_INTERVAL_MS = 15_000; // broker silence sweep 
 export const STATUS_REQ_TIMEOUT_MS = 5_000;
 export const ACK_TIMEOUT_MS = 5_000;
 
-// ---- Mailbox (D9, §7.7) ----
+// ---- Mailbox) ----
 export const DEFAULT_MAILBOX_CAP = 100;
 export const DEFAULT_MAILBOX_TTL_MS = 3_600_000; // 1 h
 export const MAILBOX_PURGE_INTERVAL_MS = 60_000;
 
-// ---- Rooms (§6.5) ----
+// ---- Rooms ----
 export const DEFAULT_MAX_ROOMS_PER_PEER = 16;
 export const MAX_PEERS_PER_ROOM = 64;
 export const DEFAULT_ROOM = "default";
 
-// ---- Rate limits (§6.6, §12 policy.rateLimits) ----
+// ---- Rate limits ----
 export const DEFAULT_RATE_MSG_PER_MIN = 30;
 // 15/min: an orchestrator launching N agents sends one urgent each (steer) —
-// 5/min (the old default) blocked a 8-agent mission blast (rate_limited:
+// 5/min (the old default) blocked a 8-agent mission blast (rate_limited
 // urgent). The msg bucket (30) and the duplicate window still bound spam.
 export const DEFAULT_RATE_URGENT_PER_MIN = 15;
 export const DEFAULT_RATE_FORCE_PER_MIN = 1;
 export const RATE_BUCKET_WINDOW_MS = 60_000;
 
-// ---- Reconnect / outbox (§8) ----
+// ---- Reconnect / outbox ----
 export const RECONNECT_BASE_MS = 250;
 export const RECONNECT_MAX_MS = 5_000;
 export const OUTBOX_FLUSH_CAP = 50;
 
-// ---- awaitReply (§8) ----
+// ---- awaitReply ----
 export const DEFAULT_AWAIT_REPLY_TIMEOUT_MS = 1_800_000; // 30 min — missions run long;
 // a short default (was 10 min) made orchestration "expire" while agents were
 // still working, which triggered re-sends and duplicate replies.
 export const MIN_AWAIT_REPLY_TIMEOUT_MS = 25;
 export const MAX_AWAIT_REPLY_TIMEOUT_MS = 1_800_000; // 30 min
-export const MAX_REMINDS = 2; // D8
+export const MAX_REMINDS = 2;
 
-// ---- ensureBroker (§7.4) ----
+// ---- ensureBroker ----
 export const ENSURE_BROKER_POLL_MS = 50;
 export const ENSURE_BROKER_MAX_POLLS = 60; // 3 s
 export const LOCK_RETRY_MAX = 3;
 
-// ---- Inbound batching (D40) ----
+// ---- Inbound batching ----
 export const DEFAULT_INBOUND_BATCH_MS = 250;
 
-// ---- Activity status (D32) ----
+// ---- Activity status ----
 export const DEFAULT_ACTIVITY_IDLE_MS = 120_000; // 2 min without heartbeat/tools
 export const DEFAULT_ACTIVITY_STUCK_MS = 900_000; // 15 min idle WITH reservations
-/** 0 = unlimited (I11: reservations live with the connection). */
+/** 0 = unlimited: reservations live with the connection). */
 export const DEFAULT_RESERVATION_TTL_MS = 0;
 
-// ---- Identity defaults (§6.4) ----
+// ---- Identity defaults ----
 export const ALIAS_RAND_CHARS = 6;
 export const MSG_ID_RAND_CHARS = 8;
 export const ALIAS_REGEX = /^[a-z][a-z0-9-]{1,31}$/;
 export const ROOM_REGEX = /^[a-z0-9][a-z0-9.-]{0,63}$/;
 export const SHA256_HEX_REGEX = /^[0-9a-f]{64}$/;
 
-// ---- Transcript / ledger (§9.5/§9.6 — bounds shared, files are Wave B) ----
+// ---- Transcript / ledger ----
 export const TRANSCRIPT_RING_SIZE = 200;
 export const DEFAULT_LEDGER_MAX_BYTES = 5_242_880; // 5 MiB
 export const DEFAULT_TRANSCRIPT_RETENTION_DAYS = 7;
@@ -84,7 +84,7 @@ export type MeshEndpoint =
   | { kind: "tcp"; host: string; port: number }
   | { kind: "tls"; host: string; port: number };
 
-/** Parse `tcp://host:port`, `tls://host:port`, `unix:///path` (D37). */
+/** Parse `tcp://host:port`, `tls://host:port`, `unix:///path`. */
 export function parseEndpoint(url: string): MeshEndpoint | null {
   const m = /^(tcp|tls|unix):\/\/(.+)$/.exec(url.trim());
   if (m === null || m[1] === undefined || m[2] === undefined) return null;
@@ -110,31 +110,31 @@ export interface MeshConfig {
   transcript: boolean;
   transcriptRetentionDays: number;
   ledgerMaxBytes: number;
-  /** D32: idle after this long without activity (status display). */
+  /** idle after this long without activity (status display). */
   activityIdleMs: number;
-  /** D32: flagged stuck when idle this long AND holding reservations. */
+  /** flagged stuck when idle this long AND holding reservations. */
   activityStuckMs: number;
-  /** D33: reservations expire after this long (0 = unlimited, I11 default). */
+  /** reservations expire after this long (0 = unlimited, default). */
   reservationTtlMs: number;
-  /** D37: broker listen endpoint (broker side). Default: local socket. */
+  /** broker listen endpoint (broker side). Default: local socket. */
   listen?: string;
-  /** D37: broker endpoint the CLIENT connects to (remote or local). */
+  /** broker endpoint the CLIENT connects to (remote or local). */
   brokerUrl?: string;
-  /** D37: shared auth token — REQUIRED for tcp/tls endpoints. */
+  /** shared auth token — REQUIRED for tcp/tls endpoints. */
   brokerToken?: string;
-  /** D37: TLS server cert/key (broker, for tls:// listen). */
+  /** TLS server cert/key (broker, for tls:// listen). */
   tlsCert?: string;
   tlsKey?: string;
-  /** D37: TLS CA (client, to verify a custom server cert). */
+  /** TLS CA (client, to verify a custom server cert). */
   tlsCa?: string;
-  /** D37: accept self-signed certs (INSECURE — LAN/dev only). */
+  /** accept self-signed certs (INSECURE — LAN/dev only). */
   tlsInsecure?: boolean;
-  /** D40: group inbound messages and inject them as ONE batched message
-   *  (ms). 0 disables batching. While the agent is busy (long tool call)
-   *  frames are HELD; when the busy period ends they are injected as one
-   *  batch. */
+  /** group inbound messages and inject them as ONE batched message
+  *  (ms). 0 disables batching. While the agent is busy (long tool call)
+  *  frames are HELD; when the busy period ends they are injected as one
+  *  batch. */
   inboundBatchMs?: number;
-  /** D40: safety cap — flush even while busy after this long (ms). */
+  /** safety cap — flush even while busy after this long (ms). */
   inboundBatchMaxHoldMs?: number;
 }
 
@@ -175,7 +175,7 @@ function envInt(env: NodeJS.ProcessEnv, key: string): number | undefined {
 }
 
 /**
- * Load config: defaults < <stateDir>/config.json < env (§12).
+ * Load config: defaults < <stateDir>/config.json < env.
  * Env overrides: MESH_ALIAS, MESH_ROOMS (csv), MESH_MAX_FRAME_BYTES,
  * MESH_MAILBOX_CAP, MESH_MAILBOX_TTL_MS, MESH_TRANSCRIPT.
  */
@@ -187,7 +187,7 @@ export function loadConfig(stateDir?: string, env: NodeJS.ProcessEnv = process.e
       fileCfg = parsed as Partial<MeshConfig>;
     }
   } catch {
-    // missing/invalid config.json → defaults (graceful, I10)
+  // missing/invalid config.json → defaults (graceful,
   }
 
   const cfg: MeshConfig = {

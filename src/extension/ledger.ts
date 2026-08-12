@@ -1,7 +1,7 @@
-// extension/ledger.ts — hash-only append-only ledger <stateDir>/ledger.jsonl (§9.5).
-// I1 body-free durable: never a message body, only hashes + metadata.
-// C5 fix: callers write `delivered` ONLY after the broker ack (enforced by wiring).
-// E25: recursive forbidden-key scan before EVERY append → throw fail-closed.
+// extension/ledger.ts — hash-only append-only ledger <stateDir>/ledger.jsonl.
+// body-free durable: never a message body, only hashes + metadata.
+// fix: callers write `delivered` ONLY after the broker ack (enforced by wiring).
+// recursive forbidden-key scan before EVERY append → throw fail-closed.
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import path from "node:path";
 import { hasForbiddenPersistedKey } from "../protocol/envelope.js";
@@ -53,9 +53,9 @@ export class MeshLedger {
   }
 
   /**
-   * Append one record. Fail-closed (E25): recursive scan of forbidden persisted
-   * keys BEFORE writing — a violation throws and zero bytes are appended (I1).
-   */
+  * Append one record. Fail-closed: recursive scan of forbidden persisted
+  * keys BEFORE writing — a violation throws and zero bytes are appended.
+  */
   append(input: LedgerInput): LedgerRecord {
     const record: LedgerRecord = {
       schema: LEDGER_SCHEMA,
@@ -73,9 +73,9 @@ export class MeshLedger {
   }
 
   /**
-   * D36: read the last `limit` records, optionally filtered (hash-only — the
-   * ledger never contains bodies, I1). For agents: durable mesh history.
-   */
+  * read the last `limit` records, optionally filtered (hash-only — the
+  * ledger never contains bodies,. For agents: durable mesh history.
+  */
   read(limit: number = 20, filter?: { from?: string; to?: string; room?: string; event?: string }): LedgerRecord[] {
     let content: string;
     try {
@@ -95,13 +95,13 @@ export class MeshLedger {
         if (filter?.event !== undefined && r.event !== filter.event) continue;
         out.push(r);
       } catch {
-        // skip malformed
+  // skip malformed
       }
     }
     return out.slice(-limit);
   }
 
-  /** Simple rotation: when ledger.jsonl exceeds maxBytes → ledger-<date>.jsonl.1 (§9.5). */
+  /** Simple rotation: when ledger.jsonl exceeds maxBytes → ledger-<date>.jsonl.1. */
   private rotateIfNeeded(): void {
     let size = 0;
     try {
@@ -111,7 +111,7 @@ export class MeshLedger {
     }
     if (size <= this.maxBytes) return;
     const date = new Date().toISOString().slice(0, 10);
-    // ledger-<date>.jsonl.N — N increments so repeated rotations never overwrite
+  // ledger-<date>.jsonl.N — N increments so repeated rotations never overwrite
     let n = 1;
     while (existsSync(path.join(this.stateDir, `ledger-${date}.jsonl.${n}`))) n += 1;
     renameSync(this.path, path.join(this.stateDir, `ledger-${date}.jsonl.${n}`));

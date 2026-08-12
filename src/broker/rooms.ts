@@ -1,4 +1,4 @@
-// broker/rooms.ts — membership, roles, presence broadcast (D6, §6.5).
+// broker/rooms.ts — membership, roles, presence broadcasts.
 import { buildFrame, isValidRoom, type FileReservation, type MeshErrorCode, type MeshRole } from "../protocol/envelope.js";
 import {
   DEFAULT_ROOM,
@@ -9,7 +9,7 @@ import type { BrokerState, PeerRecord } from "./state.js";
 
 export type RoomResult = { ok: true } | { ok: false; code: MeshErrorCode };
 
-/** Join a room (creating it). Enforces caps and roomId syntax (§6.5). */
+/** Join a room (creating it). Enforces caps and roomId syntax. */
 export function joinRoom(
   state: BrokerState,
   config: MeshConfig,
@@ -39,7 +39,7 @@ export function joinRoom(
 /**
  * Leave a room. A peer MAY end up in zero rooms (it simply cannot send or
  * receive room messages until it joins one again). Previously the last room
- * was refused (E17) — that made "default" un-leavable, and since the hello
+ * was refused — that made "default" un-leavable, and since the hello
  * re-auto-joined it, "default" kept coming back after /mesh leave default.
  */
 export function leaveRoom(state: BrokerState, peer: PeerRecord, roomId: string): RoomResult {
@@ -78,7 +78,7 @@ export function broadcastToRoom(
   }
 }
 
-/** Broadcast presence(online) to all rooms the peer belongs to (§6.5). */
+/** Broadcast presence(online) to all rooms the peer belongs to. */
 export function announceOnline(
   state: BrokerState,
   peer: PeerRecord,

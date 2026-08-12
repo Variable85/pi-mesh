@@ -1,7 +1,7 @@
 // extension/hud.ts — mesh HUD: a live footer-widget ABOVE the Pi editor.
 // renderHudLines is a PURE function (no ANSI, no I/O) → fully unit-testable
 // without a TUI. MeshHud owns state + ctx.ui.setWidget/setStatus wiring.
-// Body previews are transient memory only — never persisted (I1).
+// Body previews are transient memory only — never persisted.
 
 import { computePeerStatus, type StatusSnapshot } from "../client/client.js";
 import { agentColor } from "./colors.js";
@@ -14,11 +14,11 @@ export const HUD_STATUS_ID = "mesh";
 export const HUD_ACTIVITY_WINDOW_MS = 90_000;
 export const HUD_PEER_MAX = 5;
 export const HUD_PREVIEW_MAX = 60;
-/** Presence-triggered status() refreshes: at most 1/s, trailing. */
+/** Presence-triggered status refreshes: at most 1/s, trailing. */
 export const HUD_STATUS_REFRESH_MIN_MS = 1_000;
 
 /**
- * D27: the rooms the HUD must display — the SELF peer's rooms from the
+ * the rooms the HUD must display — the SELF peer's rooms from the
  * broker snapshot (authoritative), falling back to the local joinedRooms
  * before the first snapshot arrives. The snapshot's top-level `rooms` field
  * is the broker-WIDE list and must never be shown as "my rooms".
@@ -34,7 +34,7 @@ export function selfRooms(
 }
 
 /**
- * D27: peers VISIBLE from this session — those sharing at least one room
+ * peers VISIBLE from this session — those sharing at least one room
  * with the self (the mesh messaging rule). The raw snapshot lists every
  * peer of the broker (all rooms): a session alone in "voice" must not see
  * the cs-room agents as its peers.
@@ -123,7 +123,7 @@ export function hudStatusText(state: HudState): string {
 
 /**
  * MeshHud — owns HUD state (last status snapshot, last activity) and pushes
- * it to the TUI. refresh() eagerly computes the colorized string[] (via
+ * it to the TUI. refresh eagerly computes the colorized string[] (via
  * ctx.ui.theme, falling back to plain lines when unavailable) and calls
  * setWidget with the SAFE array form only — NEVER a factory: pi uses a
  * factory's return value directly as a component, so returning string[]
@@ -187,7 +187,7 @@ export class MeshHud {
     this.refresh();
   }
 
-  /** Presence-driven status() refresh: at most 1/s, trailing. */
+  /** Presence-driven status refresh: at most 1/s, trailing. */
   scheduleStatusRefresh(): void {
     if (this.statusTimer !== null) return; // trailing refresh already queued
     const wait = Math.max(0, HUD_STATUS_REFRESH_MIN_MS - (Date.now() - this.lastStatusFetchAt));
@@ -204,7 +204,7 @@ export class MeshHud {
     this.scheduleStatusRefresh();
   }
 
-  /** Fire-and-forget status() → snapshot. NEVER blocks session lifecycle. */
+  /** Fire-and-forget status → snapshot. NEVER blocks session lifecycle. */
   fetchStatus(): void {
     const rt = this.deps.getRuntime();
     if (rt === null || !rt.client.isOnline()) {
@@ -230,7 +230,7 @@ export class MeshHud {
   }
 
   /** Eager colorization at refresh time; plain lines when no theme (headless).
-   *  D43: known peer aliases are recolored with their per-agent color. */
+  *  known peer aliases are recolored with their per-agent color. */
   private colorize(lines: [string, ...string[]], state: HudState): string[] {
     const theme = this.ctx?.ui.theme;
     if (theme === undefined) return lines;
@@ -250,15 +250,15 @@ export class MeshHud {
       connected: rt?.client.isOnline() === true,
       connecting: this.connecting,
       alias: self !== "" ? self : "?",
-      // D27: the status snapshot's `rooms` is the broker-wide room list, NOT
-      // this session's rooms — the HUD must show the SELF peer's rooms (the
-      // broker's truth), falling back to the local joinedRooms before the
-      // first snapshot arrives. (Bug: a new session in room "voice" showed
-      // "@cs-room,voice" because it listed every room of the mesh.)
+  // the status snapshot's `rooms` is the broker-wide room list, NOT
+  // this session's rooms — the HUD must show the SELF peer's rooms (the
+  // broker's truth), falling back to the local joinedRooms before the
+  // first snapshot arrives. (Bug: a new session in room "voice" showed
+  // "@cs-room,voice" because it listed every room of the mesh.)
       rooms,
-      // D27: only peers sharing a room with this session are visible.
-      // Phase 3: announced turn state first (● working / ○ idle), D32 stuck
-      // (idle long with reservations) wins over idle, heuristic fallback.
+  // only peers sharing a room with this session are visible.
+  // Phase 3: announced turn state first (● working / ○ idle), stuck
+  // (idle long with reservations) wins over idle, heuristic fallback.
       peers: visiblePeers(this.snapshot, self, rooms).map((alias) => {
         const p = this.snapshot?.peers.find((x) => x.alias === alias);
         if (p === undefined) return alias;
@@ -286,7 +286,7 @@ function escapeRe(s: string): string {
 }
 
 /**
- * B5: recolor exact alias tokens in a line — "agent-1" must NOT recolor
+ * recolor exact alias tokens in a line — "agent-1" must NOT recolor
  * inside "agent-10" (word boundaries = the alias charset). Pure, exported
  * for tests.
  */

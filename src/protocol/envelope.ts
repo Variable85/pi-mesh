@@ -1,5 +1,5 @@
-// protocol/envelope.ts — MeshFrame type, closed sets, build/validate/parse (§6.2/§6.3/§6.7).
-// No Pi imports (I9). Validation rules applied by BOTH broker and client.
+// protocol/envelope.ts — MeshFrame type, closed sets, build/validate/parse.
+// No Pi imports. Validation rules applied by BOTH broker and client.
 import {
   ALIAS_REGEX,
   MAX_BODY_BYTES,
@@ -25,7 +25,7 @@ export interface MeshPeerInfo {
   rooms: string[];
   role?: MeshRole;
   since?: string;
-  /** D32: last broker-seen activity (heartbeat/tool frames) — status calc. */
+  /** last broker-seen activity (heartbeat/tool frames) — status calc. */
   lastSeenAt?: string;
   reservations?: FileReservation[];
   /** M1: extension version (from the hello frame). */
@@ -45,7 +45,7 @@ export interface MeshFrame {
   room?: string;
   replyTo?: string;
   priority?: MeshPriority;
-  body?: string; // TRANSIENT — never persisted (I1)
+  body?: string; // TRANSIENT — never persisted 
   bodyHash?: string;
   refs?: string[];
   reasonHash?: string; // force only
@@ -56,19 +56,19 @@ export interface MeshFrame {
   rooms?: string[];
   role?: MeshRole;
   mailboxCount?: number;
-  queuedAt?: string; // mailbox frames (§7.7)
-  interruptStatus?: string; // ack for force (§6.6)
-  reservations?: FileReservation[]; // hello/welcome/reserve/status_res (D21)
-  broadcast?: boolean; // msg: fan-out to every room member (D24)
-  replyAll?: boolean; // reply: fan-out the answer to the whole room (D24)
-  deliveredCount?: number; // ack: broadcast/replyAll deliveries (D24)
-  totalCount?: number; // ack: broadcast/replyAll targets (D24)
-  /** D34: msgId the sender is acknowledging as READ (read receipt). */
+  queuedAt?: string; // mailbox frames 
+  interruptStatus?: string; // ack for force 
+  reservations?: FileReservation[]; // hello/welcome/reserve/status_res 
+  broadcast?: boolean; // msg: fan-out to every room member 
+  replyAll?: boolean; // reply: fan-out the answer to the whole room 
+  deliveredCount?: number; // ack: broadcast/replyAll deliveries 
+  totalCount?: number; // ack: broadcast/replyAll targets 
+  /** msgId the sender is acknowledging as READ (read receipt). */
   reads?: string;
-  /** D37: shared auth token hash (hello only) — required on tcp/tls brokers. */
+  /** shared auth token hash (hello only) — required on tcp/tls brokers. */
   token?: string;
   /** M1: extension version of the sender (hello) — shown in status snapshots
-   *  so stale sessions are visible at a glance. */
+  *  so stale sessions are visible at a glance. */
   clientVersion?: string;
   /** M2: broker counters (status_res). */
   stats?: { relayed: number; refused: number; mailboxDelivered: number; mailboxDropped: number };
@@ -126,7 +126,7 @@ export const PRIORITIES = ["normal", "urgent", "force"] as const;
 export const ROLES = ["member", "observer"] as const;
 export const ACK_STATUSES = ["delivered", "queued_offline", "dropped_offline", "ok"] as const;
 
-// ---- Ledger safety (I1, §6.2 rule 8, §9.5) ----
+// ---- Ledger safety, rule 8) ----
 export const FORBIDDEN_PERSISTED_KEYS = [
   "body",
   "task",
@@ -152,7 +152,7 @@ export function hasForbiddenPersistedKey(value: unknown): boolean {
 }
 
 // ---- Alias / room / refs ----
-/** trim + strip leading '@' + lowercase (§6.4). No -/_ equivalence (D4). */
+/** trim + strip leading '@' + lowercase. No -/_ equivalence. */
 export function normalizeAlias(raw: string): string {
   let s = raw.trim();
   while (s.startsWith("@")) s = s.slice(1);
@@ -167,7 +167,7 @@ export function isValidRoom(room: string): boolean {
   return ROOM_REGEX.test(room);
 }
 
-// ---- Reservations (D21) ----
+// ---- Reservations ----
 export const MAX_RESERVATION_PATTERN_CHARS = 512;
 export const MAX_RESERVATION_REASON_CHARS = 512;
 
@@ -190,7 +190,7 @@ export function isValidReservations(value: unknown): value is FileReservation[] 
   return true;
 }
 
-/** Repo-relative refs only: reject "..", leading "/", "\", ".env" (§6.2 rule 7). */
+/** Repo-relative refs only: reject "..", leading "/", "\", ".env". */
 export function isValidRefPath(ref: string): boolean {
   if (ref.length === 0 || ref.length > MAX_REF_CHARS) return false;
   if (ref.startsWith("/") || ref.startsWith("~")) return false;
@@ -275,7 +275,7 @@ export function buildFrame(opts: BuildFrameOpts): MeshFrame {
   return frame;
 }
 
-// ---- Validate (§6.2) ----
+// ---- Validate ----
 export type ValidationResult =
   | { ok: true; frame: MeshFrame }
   | { ok: false; code: MeshErrorCode; detail: string };
@@ -284,7 +284,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === "object" && !Array.isArray(v);
 }
 
-/** N1: strict ISO-8601 shape — Date.parse alone accepts '2024', 'March 5 2024'. */
+/** strict ISO-8601 shape — Date.parse alone accepts '2024', 'March 5 2024'. */
 const ISO_8601_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})$/;
 
 function isValidIso(s: unknown): s is string {
@@ -295,7 +295,7 @@ export interface ValidateOpts {
   maxBodyBytes?: number;
 }
 
-/** Validate an arbitrary value against §6.2 rules. Unknown keys tolerated. */
+/** Validate an arbitrary value against rules. Unknown keys tolerated. */
 export function validateFrame(value: unknown, opts: ValidateOpts = {}): ValidationResult {
   const maxBody = opts.maxBodyBytes ?? MAX_BODY_BYTES;
   if (!isRecord(value)) return { ok: false, code: "invalid_frame", detail: "not an object" };
@@ -396,7 +396,7 @@ export function validateFrame(value: unknown, opts: ValidateOpts = {}): Validati
     return { ok: false, code: "invalid_frame", detail: "bad reservations" };
   }
 
-  // Rule 9b: auth token — hello only, bounded (D37)
+  // Rule 9b: auth token — hello only, bounded
   if (value.token !== undefined) {
     if (value.type !== "hello") {
       return { ok: false, code: "invalid_frame", detail: "token on non-hello" };
@@ -413,7 +413,7 @@ export function validateFrame(value: unknown, opts: ValidateOpts = {}): Validati
     }
   }
 
-  // Rule 9: broadcast / replyAll fan-out (D24)
+  // Rule 9: broadcast / replyAll fan-out
   if (value.broadcast !== undefined) {
     if (typeof value.broadcast !== "boolean") {
       return { ok: false, code: "invalid_frame", detail: "bad broadcast" };
@@ -440,7 +440,7 @@ export function validateFrame(value: unknown, opts: ValidateOpts = {}): Validati
       }
     }
   }
-  // D34: read receipts — only on "read" frames, with a target msgId
+  // read receipts — only on "read" frames, with a target msgId
   if (value.type === "read") {
     if (typeof value.reads !== "string" || value.reads.length === 0 || value.reads.length > MAX_FRAME_ID_CHARS) {
       return { ok: false, code: "invalid_frame", detail: "bad reads" };

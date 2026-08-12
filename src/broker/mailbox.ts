@@ -1,4 +1,4 @@
-// broker/mailbox.ts — offline queue per alias: cap, TTL, flush (D9, §7.7).
+// broker/mailbox.ts — offline queue per alias: cap, TTL, flush.
 import type { MeshFrame } from "../protocol/envelope.js";
 import type { MeshConfig } from "../shared/config.js";
 import type { BrokerState, StoredMsg } from "./state.js";
@@ -18,7 +18,7 @@ function dropExpired(
   return fresh;
 }
 
-/** Enqueue for a known offline alias. At cap, the oldest is dropped (E6). */
+/** Enqueue for a known offline alias. At cap, the oldest is dropped. */
 export function enqueueMailbox(
   state: BrokerState,
   config: MeshConfig,
@@ -35,7 +35,7 @@ export function enqueueMailbox(
   state.mailbox.set(alias, queue);
 }
 
-/** Periodic TTL purge across all aliases (§7.7). */
+/** Periodic TTL purge across all aliases. */
 export function purgeAllExpired(
   state: BrokerState,
   config: MeshConfig,
@@ -52,7 +52,7 @@ export function mailboxSize(state: BrokerState, config: MeshConfig, alias: strin
 
 /**
  * Drain the mailbox at hello: returns stored frames (as `mailbox` frames with
- * queuedAt, §7.7) in enqueue order and clears the queue.
+ * queuedAt) in enqueue order and clears the queue.
  */
 export function flushMailbox(
   state: BrokerState,

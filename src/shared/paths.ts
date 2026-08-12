@@ -1,4 +1,4 @@
-// shared/paths.ts — runtime/state directory resolution (D19). No Pi imports (I9).
+// shared/paths.ts — runtime/state directory resolution. No Pi imports.
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -23,7 +23,7 @@ export function runtimeDir(env: NodeJS.ProcessEnv = process.env): string {
   try {
     uid = String(os.userInfo().uid);
   } catch {
-    // uid unavailable (unusual) → stable fallback
+  // uid unavailable (unusual) → stable fallback
   }
   return path.join(os.tmpdir(), `${RUNTIME_DIR_PREFIX}${uid}`);
 }

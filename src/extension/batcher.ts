@@ -1,5 +1,5 @@
-// extension/batcher.ts — D40: group inbound messages arriving in a burst and
-// inject them as ONE batched message. After a long tool call (sleep, load),
+// extension/batcher.ts —: group inbound messages arriving in a burst and
+// inject them as ONE batched message. After a long tool call (sleep, load)
 // N replies queue up; injecting them one-by-one forces N turns and N LLM
 // calls. A batch is one turn: the agent sees the whole lot and answers once.
 import type { MeshFrame, MeshPriority } from "../protocol/envelope.js";
@@ -11,7 +11,7 @@ export interface BatchedInjection {
   deliverAs: DeliverAs;
 }
 
-/** Bounds for the batched content (I8: named constants). */
+/** Bounds for the batched content: named constants). */
 export const BATCH_MAX_MESSAGES = 12;
 export const BATCH_MAX_BODY_CHARS = 240;
 
@@ -20,7 +20,7 @@ function priorityRank(p: MeshPriority): number {
 }
 
 /**
- * D40: one message per frame (formatted), batched content = numbered list.
+ * one message per frame (formatted), batched content = numbered list.
  * The delivery mode is the most interrupting one in the lot (steer wins over
  * followUp); force frames NEVER go through the batcher (they have their own
  * abort path).
@@ -74,7 +74,7 @@ export function buildSingleMessage(frame: MeshFrame): InboundMessage {
 export { priorityRank };
 
 /**
- * D40: accumulates inbound frames and injects them as ONE batched message
+ * accumulates inbound frames and injects them as ONE batched message
  * (single turn). KEY: while the agent is BUSY (e.g. a long sleep/bash), the
  * batcher HOLDS the frames — they do not enter pi's queue one by one. When
  * the busy period ends (tool_result) or the agent turns idle, everything is
@@ -103,8 +103,8 @@ export class InboundBatcher {
   }
 
   /** The short window elapsed: flush only when the agent is NOT busy —
-   *  otherwise hold (a long tool call is running; more messages may come)
-   *  and arm a max-hold fallback so nothing is retained forever. */
+  *  otherwise hold (a long tool call is running; more messages may come)
+  *  and arm a max-hold fallback so nothing is retained forever. */
   private onWindow(): void {
     this.timer = null;
     if (this.frames.length === 0) return;

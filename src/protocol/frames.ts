@@ -1,4 +1,4 @@
-// protocol/frames.ts — NDJSON framing (D17), sha256, ids, clock. No Pi imports (I9).
+// protocol/frames.ts — NDJSON framing, sha256, ids, clock. No Pi imports.
 import { createHash, randomBytes } from "node:crypto";
 import { MSG_ID_RAND_CHARS } from "../shared/config.js";
 
@@ -17,7 +17,7 @@ export function nowIso(): string {
   return new Date().toISOString();
 }
 
-/** m_<time36>_<rand8hex> (D18). */
+/** m_<time36>_<rand8hex>. */
 export function makeMsgId(rand: (size: number) => Buffer = randomBytes): string {
   const time36 = Date.now().toString(36);
   const randHex = rand(MSG_ID_RAND_CHARS / 2).toString("hex").slice(0, MSG_ID_RAND_CHARS);

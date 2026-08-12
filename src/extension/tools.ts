@@ -1,6 +1,6 @@
-// extension/tools.ts — the 4 mesh tools (§9.2): mesh_send, mesh_reply,
-// mesh_status, mesh_history. Plain JSON Schema parameters (zero-dependency).
-// Honest statuses: delivered ≠ read ≠ answered (I4). Offline → blocked (I10).
+// extension/tools.ts — the mesh tools (send/reply/status/history/wait_all/
+// ledger/reserve/release). Plain JSON Schema parameters (zero-dependency).
+// Honest statuses: delivered ≠ read ≠ answered. Offline → blocked.
 import { computePeerStatus, MeshClient, type SendResult } from "../client/client.js";
 import type { MeshPriority } from "../protocol/envelope.js";
 import { buildFrame, normalizeAlias } from "../protocol/envelope.js";
@@ -32,16 +32,16 @@ export interface MeshRuntime {
   ctx: SessionContext | null;
   stateDir: string;
   runtimeDir: string;
-  /** Pi session id — stable across /reload (identity key, D23). */
+  /** Pi session id — stable across /reload (identity key). */
   sessionId: string;
   /** Identity persistence (alias/rooms/reservations survive reloads). */
   identity: MeshIdentity;
-  /** D30: transferred history from a /mesh new handoff (injected at ready). */
+  /** transferred history from a /mesh new handoff (injected at ready). */
   pendingHistory?: string[];
-  /** D40: inbound batching (flush remaining frames on shutdown). */
+  /** inbound batching (flush remaining frames on shutdown). */
   batcher?: { flushNow(): void };
   startedAt: number;
-  /** B1: inbound-path disk/injection failure counters (see index.ts). */
+  /** inbound-path disk/injection failure counters (see index.ts). */
   ledgerFailures: number;
   transcriptFailures: number;
   injectionFailures: number;
@@ -84,12 +84,12 @@ function resultText(res: SendResult): string {
   }
 }
 
-/** Best-effort ledger append — a ledger failure never crashes the session (I10). */
+/** Best-effort ledger append — a ledger failure never crashes the session. */
 function safeLedger(rt: MeshRuntime, input: Parameters<MeshLedger["append"]>[0]): void {
   try {
     rt.ledger.append(input);
   } catch {
-    // fail-closed throw is for forbidden keys; our records never contain them
+  // fail-closed throw is for forbidden keys; our records never contain them
   }
 }
 
@@ -165,7 +165,7 @@ async function execMeshSend(
   const reason = str(params.reason);
   const awaitReply = params.awaitReply === true;
   const block = params.block === false ? false : true;
-  const launch = awaitReply && !block; // D46: track + return immediately
+  const launch = awaitReply && !block; // track + return immediately
   const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : undefined;
   const refs = Array.isArray(params.refs)
     ? params.refs.filter((r): r is string => typeof r === "string")
@@ -173,7 +173,7 @@ async function execMeshSend(
   const bodyHash = sha256(message);
   const reasonHash = priority === "force" && reason !== undefined ? sha256(reason) : undefined;
 
-  // Guards (§9.4): self-send, duplicate window, client caps, observer.
+  // Guards: self-send, duplicate window, client caps, observer.
   const guard = rt.guards.checkSend({ from: rt.client.alias, to, room, body: message, priority });
   if (!guard.ok) {
     safeLedger(rt, {
@@ -183,7 +183,7 @@ async function execMeshSend(
   }
 
   if (!rt.client.isOnline()) {
-    // I10: broker absent → tools answer blocked, never crash the session.
+  // broker absent → tools answer blocked, never crash the session.
     try {
       await rt.client.connect();
     } catch {
@@ -206,7 +206,7 @@ async function execMeshSend(
     message, room, priority, reason, awaitReply, block, timeoutMs, refs, broadcast,
   });
 
-  // C5: `delivered` is ledgered ONLY here — after the broker ack (client.send
+  // `delivered` is ledgered ONLY here — after the broker ack (client.send
   // resolves delivered exclusively post-ack).
   switch (res.status) {
     case "delivered":
@@ -245,7 +245,7 @@ async function execMeshSend(
     reason: "reason" in res ? res.reason : undefined,
   });
   if (guard.warnings.includes(LOOP_GUARD_WARNING)) details.loopGuard = "matched";
-  // D46: launch-mode hint so the agent knows the verdict comes from wait_all
+  // launch-mode hint so the agent knows the verdict comes from wait_all
   const hint =
     launch && (res.status === "delivered" || res.status === "queued_offline")
       ? ` (mission tracked — use mesh_wait_all for the group verdict)`
@@ -294,13 +294,13 @@ async function execMeshReply(
     }
   }
 
-  // Peek the original BEFORE reply() — read-only, and safe against any
+  // Peek the original BEFORE reply — read-only, and safe against any
   // future inbox eviction during the round-trip.
   const orig = rt.client.peekInbox(msgId);
   if (orig === undefined || orig.from === undefined) {
-    // E9: msgId unknown to the local inbox (or no usable sender) → explicit
-    // refusal BEFORE the network call (mirrors client.reply's guard), so no
-    // 'sent' record is ever ledgered for a blocked reply.
+  // msgId unknown to the local inbox (or no usable sender) → explicit
+  // refusal BEFORE the network call (mirrors client.reply's guard), so no
+  // 'sent' record is ever ledgered for a blocked reply.
     safeLedger(rt, { event: "blocked", id: msgId, from: rt.client.alias, bodyHash, refs, code: "reply_without_target" });
     return textResult(
       "blocked: reply_without_target — use the exact msgId from an inbound [mesh] " +
@@ -308,18 +308,18 @@ async function execMeshReply(
       sendDetails({ status: "blocked", reason: "reply_without_target", msgId, bodyHash }),
     );
   }
-  // B13 causal anchoring: 'sent' is ledgered BEFORE the network call,
+  // causal anchoring: 'sent' is ledgered BEFORE the network call,
   // mirroring execMeshSend ordering, enriched with to/room/priority from the
   // peeked original (undefined keys omitted by the ledger, as below).
   safeLedger(rt, {
     event: "sent", from: rt.client.alias, to: toRaw ?? orig.from, room: orig.room, priority: orig.priority, bodyHash, refs,
     code: replyAll ? "reply_all" : toRaw !== undefined ? "reply_to" : undefined,
   });
-  // D25: flag re-replies to the same msgId (warning only — never blocks)
+  // flag re-replies to the same msgId (warning only — never blocks)
   const replyGuard = rt.guards.checkReply(msgId);
   const res = await rt.client.reply(msgId, message, { refs, to: toRaw, replyAll });
   if (res.status === "error" && res.reason === "reply_without_target") {
-    // E9 defense in depth: inbox eviction between peek and reply.
+  // defense in depth: inbox eviction between peek and reply.
     safeLedger(rt, { event: "blocked", id: msgId, from: rt.client.alias, bodyHash, refs, code: "reply_without_target" });
     return textResult(
       "blocked: reply_without_target — use the exact msgId from an inbound [mesh] " +
@@ -394,7 +394,7 @@ async function execMeshStatus(
     }
   }
   const snap = await rt.client.status(room);
-  // D29: by default, only peers VISIBLE from this session (sharing at least
+  // by default, only peers VISIBLE from this session (sharing at least
   // one room) are listed — an agent alone in "voice" must not see the
   // cs-room agents. all:true (or an explicit room filter) lifts that.
   const mine = new Set(room !== undefined ? [room] : rt.client.rooms);
@@ -412,8 +412,8 @@ async function execMeshStatus(
       const v = p.clientVersion !== undefined && p.clientVersion !== "" ? ` v${p.clientVersion}` : " v?";
       const skew = p.clientVersion !== undefined && p.clientVersion !== localVersion ? " ⚠" : "";
       const since = p.since !== undefined ? ` since=${p.since}` : "";
-      // Phase 3: announced turn state wins; heuristic (lastSeenAt) as
-      // fallback for peers that never announce (old versions)
+  // Phase 3: announced turn state wins; heuristic (lastSeenAt) as
+  // fallback for peers that never announce (old versions)
       if (p.activity !== undefined) {
         const tag = p.activity.state === "busy"
           ? " ● working"
@@ -489,7 +489,7 @@ function execMeshHistory(
   const limitRaw = typeof params.limit === "number" ? Math.floor(params.limit) : 20;
   const limit = Math.min(TRANSCRIPT_RING_SIZE, Math.max(1, limitRaw));
   const withBodies = params.withBodies !== false;
-  // mesh_history reads the client MEMORY ring only — never the ledger (§9.2).
+  // mesh_history reads the client MEMORY ring only — never the ledger.
   const frames = rt.client.transcript.slice(-limit);
   const lines = frames.map((f) => {
     const head = `${f.ts} ${f.type} ${f.from ?? "?"}→${f.to ?? "*"}`;
@@ -551,7 +551,7 @@ export function buildStatusSummary(
       if (!waitingOn.has(p.alias)) likelyDone += 1;
       continue;
     }
-    // heuristic fallback (no announced activity)
+  // heuristic fallback (no announced activity)
     const act = computePeerStatus(p.lastSeenAt, (p.reservations?.length ?? 0) > 0, idleMs, stuckMs, now);
     if (act.status === "active") working += 1;
     else if (act.status === "stuck") stuck += 1;
@@ -685,7 +685,7 @@ async function execMeshReserve(
   const res = await rt.client.reserve(rawPaths, reason);
   if (res.status === "delivered") {
     safeLedger(rt, { event: "reserved", id: res.msgId, from: rt.client.alias, refs: rawPaths, code: reason });
-    // D23: reservations must survive /reload → persist identity now.
+  // reservations must survive /reload → persist identity now.
     rt.identity.save(identityFromClient(rt.sessionId, rt.client));
     return textResult(`reserved ${rawPaths.length} path(s) — peers notified`, sendDetails({ status: "delivered", paths: rawPaths, reason }));
   }
@@ -719,7 +719,7 @@ async function execMeshRelease(
   const res = await rt.client.release(rawPaths);
   if (res.status === "delivered") {
     safeLedger(rt, { event: "released", from: rt.client.alias, refs: res.released.length > 0 ? res.released : undefined });
-    // D23: persist the reduced reservation set before returning.
+  // persist the reduced reservation set before returning.
     rt.identity.save(identityFromClient(rt.sessionId, rt.client));
     return textResult(
       res.released.length > 0
