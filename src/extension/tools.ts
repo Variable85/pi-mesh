@@ -343,7 +343,7 @@ async function execMeshReply(
   });
   if (replyGuard.warnings.includes(REPLY_REPEAT_WARNING)) details.alreadyReplied = "matched";
   const text = replyGuard.warnings.includes(REPLY_REPEAT_WARNING)
-    ? `${resultText(res)} — ⚠️ déjà répondu à ce msgId récemment (vérifie avant de re-répondre)`
+    ? `${resultText(res)} — ⚠️ already replied to this msgId recently (check before re-answering)`
     : resultText(res);
   return textResult(text, details);
 }
@@ -603,7 +603,7 @@ export function registerTools(pi: ExtensionAPI, getRuntime: GetRuntime): void {
     promptGuidelines:
       "Only msgIds seen in inbound [mesh] messages are valid targets. " +
       "Replies interrupt the recipient (steer). If the result warns " +
-      "'déjà répondu', you already answered this msgId — do not re-answer.",
+      "If the result warns 'already replied', you already answered this msgId — do not re-answer.",
     parameters: MESH_REPLY_PARAMETERS,
     execute: (_toolCallId, params, _signal, _onUpdate, _ctx) => execMeshReply(getRuntime, params),
   });

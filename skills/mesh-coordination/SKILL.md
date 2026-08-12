@@ -1,67 +1,66 @@
 ---
 name: mesh-coordination
-description: Guide d'utilisation du mesh multi-agents (pi-mesh) — messagerie, réponses, réservations, anti-boucles. À lire quand tu coordonnes avec d'autres agents ou que tu réponds à un message mesh.
+description: Guide for using the multi-agent mesh (pi-mesh) — messaging, replies, reservations, anti-loop rules. Read it when you coordinate with other agents or answer a mesh message.
 ---
 
-# Coordination mesh (pi-mesh)
+# Mesh coordination (pi-mesh)
 
-Tu es connecté à un mesh local d'agents pi. Règles et réflexes pour ne pas
-créer de doublons, de boucles ou de confusion.
+You are connected to a local mesh of pi agents. Rules and reflexes to avoid
+duplicates, loops and confusion.
 
-## Se repérer
+## Get oriented
 
-- `mesh_status` — qui est en ligne, dans quelle room, **statut** (`○idle`,
-  `✕stuck` = inactif avec réservations), et les accusés de lecture (`reads:`).
-- `mesh_history` — les derniers échanges (mémoire).
-- `mesh_ledger` — l'historique DURABLE (hash-only) : filtre par
-  `from/to/room/event`. **Utilise-le pour vérifier avant de re-envoyer.**
+- `mesh_status` — who is online, in which room, **status** (`○idle`,
+  `✕stuck` = idle long with reservations), and read receipts (`reads:`).
+- `mesh_history` — recent exchanges (memory).
+- `mesh_ledger` — durable history (hash-only): filter by
+  `from/to/room/event`. **Use it to verify before re-sending.**
 
-## Envoyer
+## Sending
 
-- `mesh_send { to: "agent-X", message }` — message direct (room partagée
-  requise).
-- `mesh_send { broadcast: true, room: "cs-room", message }` — annonce à toute
-  la room (le résultat donne `delivered N/M`).
-- `awaitReply: true` : attend une réponse (timeout 30 min par défaut).
+- `mesh_send { to: "agent-X", message }` — direct message (shared room
+  required).
+- `mesh_send { broadcast: true, room: "cs-room", message }` — announce to the
+  whole room (the result reports `delivered N/M`).
+- `awaitReply: true` waits for an answer (30 min default timeout).
 
-## Répondre (RÈGLES D'OR)
+## Replying (GOLDEN RULES)
 
-1. **Toujours `mesh_reply { msgId, message }` avec l'EXACT msgId reçu** — ne
-   jamais répondre par un nouveau `mesh_send`.
-2. **Une seule réponse par msgId.** Si le résultat te dit `⚠️ déjà répondu à
-   ce msgId récemment` — tu as DÉJÀ répondu : n'insiste pas, la réponse est
-   partie (`delivered`).
-3. **`replyAll: true`** pour répondre à TOUTE la room du message original
-   (ex. "mission terminée" visible par tous).
-4. **`to: "agent-Y"`** pour faire suivre la réponse à un autre agent que
-   l'émetteur.
-5. Un **rappel (remind)** dit *"IGNORE ce rappel si tu as DÉJÀ répondu"* :
-   si tu as déjà répondu, **ignore-le**.
-6. **NE RÉPONDS JAMAIS à une réponse** (reply-à-reply). Les réponses à des
-   réponses arrivent avec le label **INFO ONLY** : lis-les (une preuve, une
-   correction peuvent être importantes), mais **ne réponds JAMAIS par un
-   accusé de réception** — pour réagir (question, correction), envoie un
-   **nouveau message** (`mesh_send`), pas un reply.
+1. **Always `mesh_reply { msgId, message }` with the EXACT msgId received** —
+   never answer with a new `mesh_send`.
+2. **One answer per msgId.** If the result says `⚠️ already replied to this
+   msgId recently` — you ALREADY replied: do not insist, the answer is gone
+   (`delivered`).
+3. **`replyAll: true`** to answer the WHOLE room of the original message
+   (e.g. "mission done" visible to everyone).
+4. **`to: "agent-Y"`** to forward the answer to another agent than the
+   sender.
+5. A **reminder** says *"IGNORE this reminder if you ALREADY replied to this
+   msgId"*: if you already replied, **ignore it**.
+6. **NEVER reply to a reply** (reply-à-reply). Replies to replies arrive with
+   the **INFO ONLY** label: read them (a proof or a correction can be
+   important), but **never answer with an acknowledgment** — to react
+   (question, correction), send a **new message** (`mesh_send`), not a reply.
 
-## Anti-boucles (orchestrateur)
+## Anti-loops (orchestrator)
 
-- **`expired` ≠ perdu.** Une réponse tardive est livrée et injectée
-  automatiquement. Avant de re-envoyer une mission : `mesh_ledger` ou
-  `mesh_history` pour vérifier si la réponse n'est pas déjà arrivée.
-- Ne réassigne pas une mission déjà livrée : vérifie d'abord le registre
-  (MISSIONS.md / dossier de travail) ET `mesh_ledger`.
-- Les agents peuvent être `✕stuck` (inactifs avec réservations) : contacte-les
-  via `mesh_send` avant de conclure qu'ils sont perdus.
+- **`expired` ≠ lost.** A late answer is delivered and injected
+  automatically. Before re-sending a mission: check `mesh_ledger` or
+  `mesh_history` to see whether the answer already arrived.
+- Do not re-assign an already delivered mission: check the register
+  (MISSIONS.md / work folder) AND `mesh_ledger` first.
+- Agents can be `✕stuck` (idle with reservations): contact them via
+  `mesh_send` before concluding they are lost.
 
-## Réservations de fichiers
+## File reservations
 
-- **`mesh_reserve { paths: [...] }` AVANT d'éditer** un fichier partagé ;
-  `mesh_release` dès que terminé.
-- Si un `edit`/`write` est **bloqué** : un autre agent a réservé le chemin —
-  `mesh_send` au propriétaire pour coordonner, ne force pas.
-- Les réservations disparaissent à la déconnexion (et après le TTL configuré).
+- **`mesh_reserve { paths: [...] }` BEFORE editing** a shared file;
+  `mesh_release` as soon as you are done.
+- If an `edit`/`write` is **blocked**: another agent reserved the path —
+  `mesh_send` the owner to coordinate, do not force it.
+- Reservations disappear on disconnect (and after the configured TTL).
 
-## Statuts (honnêtes)
+## Honest statuses
 
-`delivered` = écrit sur le socket du destinataire (≠ lu ≠ répondu).
-`reads:` dans `mesh_status` montre qui a pris connaissance de tes messages.
+`delivered` = written on the recipient's socket (≠ read ≠ answered).
+`reads:` in `mesh_status` shows who has taken knowledge of your messages.

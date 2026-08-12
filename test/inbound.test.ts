@@ -63,7 +63,7 @@ describe("formatInboundContent: remind frames carry the replyTo instruction", ()
       content,
       '[mesh] @broker (room default, normal) reminder: reply due for msg-123' +
         ' — reply with the mesh_reply tool using msgId "msg-123" ' +
-        '(IGNORE ce rappel si tu as DÉJÀ répondu à ce msgId)',
+        '(IGNORE this reminder if you ALREADY replied to this msgId)',
     );
   });
 
@@ -114,7 +114,7 @@ describe("reply-to-reply info-only format (D39)", () => {
     });
     const content = formatInboundContent(chain, { replyChain: true });
     assert.ok(content.includes("INFO ONLY"), content);
-    assert.ok(content.includes("JAMAIS d'accusé de réception"), content);
+    assert.ok(content.includes("NEVER an acknowledgment"), content);
 
     const mission = buildFrame({
       type: "reply",

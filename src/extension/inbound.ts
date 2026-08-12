@@ -27,7 +27,7 @@ export function formatInboundContent(frame: MeshFrame, opts: { replyChain?: bool
     return (
       `${prefix} reminder: reply due for ${replyTo}` +
       ` — reply with the mesh_reply tool using msgId "${replyTo}" ` +
-      `(IGNORE ce rappel si tu as DÉJÀ répondu à ce msgId)`
+      `(IGNORE this reminder if you ALREADY replied to this msgId)`
     );
   }
   if (frame.type === "reply") {
@@ -39,9 +39,9 @@ export function formatInboundContent(frame: MeshFrame, opts: { replyChain?: bool
     return (
       `${prefix} reply to ${frame.replyTo ?? "?"}: ${frame.body ?? ""}` +
       (chain
-        ? `\n↩ INFO ONLY (réponse à une réponse) : réponds UNIQUEMENT si c'est une ` +
-          `question ou une information nouvelle — JAMAIS d'accusé de réception ; ` +
-          `pour réagir, utilise mesh_send (pas mesh_reply)`
+        ? `\n↩ INFO ONLY (reply to a reply): reply ONLY if this is a question or ` +
+          `new information — NEVER an acknowledgment; to react, use mesh_send ` +
+          `(not mesh_reply)`
         : `\n↩ answer back with the mesh_reply tool using msgId "${frame.id}"`) +
       (frame.replyAll === true
         ? " (this reply went to the whole room)"

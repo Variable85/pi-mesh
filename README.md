@@ -132,7 +132,7 @@ interruption) with an **INFO ONLY label** — the LLM decides whether the
 content is worth reacting to (a proof, a correction), and the label says
 never to answer with an ack and to use `mesh_send` for reactions.
 Replies are rate-limited (30/min msg bucket) as a spam safety net, and
-the "déjà répondu" warning flags re-answers.
+the "already replied" warning flags re-answers.
 
 **Reply handling (D25)**: replies are deduped — only the FIRST answer to a
 given msgId reaches the session (via `awaitReply` or as an injected orphan);

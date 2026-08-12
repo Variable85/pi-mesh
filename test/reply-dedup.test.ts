@@ -130,7 +130,7 @@ describe("reply delivery mode (D25)", () => {
       ts: "2026-08-10T00:00:00.000Z",
     };
     const content = formatInboundContent(f as unknown as MeshFrame);
-    assert.ok(content.includes("IGNORE ce rappel si tu as DÉJÀ répondu"), content);
+    assert.ok(content.includes("IGNORE this reminder if you ALREADY replied"), content);
   });
 });
 
@@ -191,7 +191,7 @@ describe("reply-to-reply info-only (D39: the LLM judges)", () => {
       const injected = await withTimeout(r1P, 5000, "mission reply injected");
       assert.equal(injected.body, "MISSION TERMINÉE");
 
-      // lead répond au reply de bob (reply-à-reply) — livré, et bob le reçoit
+      // lead replies to bob's reply (reply-à-reply) — delivered, bob receives it
       const r2P = new Promise<MeshFrame>((resolve) => {
         bob.once("inbound", (f: MeshFrame) => resolve(f));
       });
