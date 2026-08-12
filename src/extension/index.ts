@@ -9,6 +9,7 @@ import { MeshGuards } from "./guards.js";
 import { MeshHud } from "./hud.js";
 import { attachClientListeners } from "./attach.js";
 import { injectInbound } from "./inbound.js";
+import { renderMeshInbound } from "./renderer.js";
 import type { PersistedIdentity } from "./identity.js";
 import { identityFromClient, MeshIdentity } from "./identity.js";
 import { MeshLedger } from "./ledger.js";
@@ -27,6 +28,24 @@ export default function meshExtension(pi: ExtensionAPI): void {
   // Tools + command are registered IMMEDIATELY (they answer `blocked` offline).
   registerTools(pi, getRuntime);
   registerCommands(pi, getRuntime, () => hud?.onLocalChange(), () => hud);
+  // D41: colored rendering of mesh messages (simple + batches).
+  if (typeof pi.registerMessageRenderer === "function") {
+    pi.registerMessageRenderer<{ kind?: string; count?: number }>(
+      "mesh-inbound",
+      (message, _options, theme) => {
+        const content = typeof message.content === "string" ? message.content : "";
+        const details = message.details;
+        return {
+          render: (width: number) =>
+            renderMeshInbound(content, details, width, {
+              fg: (color, text) => theme.fg(color, text),
+            }),
+          invalidate: () => {},
+        };
+      },
+    );
+  }
+
 
   /** Persist the current client state as this session's identity (D23). */
   const saveIdentity = (rt: MeshRuntime): void => {
@@ -126,6 +145,13 @@ export default function meshExtension(pi: ExtensionAPI): void {
   // D35: a pi FORK creates a fresh session — hand the mesh identity over
   // (like /mesh new, without history) so the forked session keeps alias,
   // rooms and reservations instead of starting anonymous.
+  // D40: when a tool call ends (e.g. the sleep), the busy period is over —
+  // deliver every held inbound message as ONE batch, so the next LLM call
+  // sees the whole lot in a single turn instead of one message per turn.
+  pi.on("tool_result", async (_event, _ctx) => {
+    runtime?.batcher?.flushNow();
+  });
+
   pi.on("session_before_fork", (_event, ctx) => {
     const rt = runtime;
     if (rt === null) return;

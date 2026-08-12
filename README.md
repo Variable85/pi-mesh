@@ -275,12 +275,18 @@ MESH_BROKER_URL=tcp://<ip-de-A>:8712 MESH_BROKER_TOKEN=mon-secret pi
   machine; reservations protect the same repo paths when both machines
   share the same git checkout (always reserve repo-relative paths).
 
-**Inbound batching (D40)**: messages arriving in a burst (e.g. after a long
-tool call) are grouped over a short window (`inboundBatchMs`, default 250 ms,
-0 = off) and injected as **ONE batched message** — a numbered list — instead
-of one turn per message. The agent answers once for the whole lot instead of
-ack-ing each one. Delivery mode: steer if the batch contains a reply/urgent,
-followUp otherwise. `force` and reminders always bypass the batcher.
+**Inbound batching (D40)**: messages are **held while the agent is busy**
+(a long tool call like a `sleep` runs) and flushed as **ONE batched
+message** when the busy period ends (`tool_result`) or the agent turns
+idle — so a whole burst lands in the conversation at once, one turn
+instead of one turn per message. `inboundBatchMs` (250 ms, 0 = off) is
+the idle window; `inboundBatchMaxHoldMs` (30 s) is the safety cap while
+busy. Delivery: steer if the batch contains a reply/urgent, followUp
+otherwise; `force` and reminders always bypass.
+
+**Colored rendering (D41)**: mesh messages in the conversation are
+rendered with `pi-tui` — batch header in accent, sender aliases in
+accent, instructions muted, long lines wrapped.
 
 ## Platform notes
 

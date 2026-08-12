@@ -286,6 +286,11 @@ export class MeshClient extends EventEmitter {
     return this.config.inboundBatchMs ?? 0;
   }
 
+  /** D40: max hold while busy (safety cap). */
+  get inboundBatchMaxHoldMs(): number {
+    return this.config.inboundBatchMaxHoldMs ?? 30_000;
+  }
+
   isOnline(): boolean {
     return this.online;
   }

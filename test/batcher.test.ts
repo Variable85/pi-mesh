@@ -46,7 +46,7 @@ describe("InboundBatcher (D40)", () => {
   it("pushes during the window, flushes ONCE with all frames", async () => {
     let flushes = 0;
     let got: MeshFrame[] = [];
-    const b = new InboundBatcher(50, (frames) => {
+    const b = new InboundBatcher(50, 500, () => false, (frames) => {
       flushes += 1;
       got = frames;
     });
@@ -59,7 +59,7 @@ describe("InboundBatcher (D40)", () => {
 
   it("flushNow delivers immediately and resets", async () => {
     let flushes = 0;
-    const b = new InboundBatcher(5000, () => {
+    const b = new InboundBatcher(5000, 500, () => false, () => {
       flushes += 1;
     });
     b.push(msg());
@@ -67,6 +67,36 @@ describe("InboundBatcher (D40)", () => {
     assert.equal(flushes, 1);
     b.flushNow();
     assert.equal(flushes, 1, "empty flush is a no-op");
+  });
+
+  it("HOLDS frames while busy, flushes everything when the busy period ends", async () => {
+    let busy = true;
+    let flushes = 0;
+    let got: MeshFrame[] = [];
+    const b = new InboundBatcher(50, 5000, () => busy, (frames) => {
+      flushes += 1;
+      got = frames;
+    });
+    b.push(msg());
+    b.push(msg());
+    await new Promise((r) => setTimeout(r, 120)); // window elapsed, but busy
+    assert.equal(flushes, 0, "no flush while busy (long tool call running)");
+    assert.equal(b.pending, 2, "frames are held");
+    busy = false; // tool_result: busy period over
+    b.flushNow();
+    assert.equal(flushes, 1);
+    assert.equal(got.length, 2, "the WHOLE burst is delivered at once");
+    assert.equal(b.pending, 0);
+  });
+
+  it("flushes even while busy after the max-hold cap", async () => {
+    let flushes = 0;
+    const b = new InboundBatcher(30, 80, () => true, () => {
+      flushes += 1;
+    });
+    b.push(msg());
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(flushes, 1, "max-hold safety cap flushes despite busy");
   });
 
   it("bypassesBatch: force and remind are immediate; normal/reply are batched", () => {

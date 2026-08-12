@@ -130,9 +130,12 @@ export interface MeshConfig {
   /** D37: accept self-signed certs (INSECURE — LAN/dev only). */
   tlsInsecure?: boolean;
   /** D40: group inbound messages and inject them as ONE batched message
-   *  (ms). 0 disables batching. Bursts after a long tool call become a
-   *  single turn instead of one turn per message. */
+   *  (ms). 0 disables batching. While the agent is busy (long tool call)
+   *  frames are HELD; when the busy period ends they are injected as one
+   *  batch. */
   inboundBatchMs?: number;
+  /** D40: safety cap — flush even while busy after this long (ms). */
+  inboundBatchMaxHoldMs?: number;
 }
 
 export const DEFAULT_CONFIG: MeshConfig = {
@@ -150,6 +153,7 @@ export const DEFAULT_CONFIG: MeshConfig = {
   activityStuckMs: DEFAULT_ACTIVITY_STUCK_MS,
   reservationTtlMs: DEFAULT_RESERVATION_TTL_MS,
   inboundBatchMs: DEFAULT_INBOUND_BATCH_MS,
+  inboundBatchMaxHoldMs: 30_000,
 };
 
 function clampFrameBytes(n: number): number {
@@ -210,6 +214,10 @@ export function loadConfig(stateDir?: string, env: NodeJS.ProcessEnv = process.e
     inboundBatchMs: fileCfg.inboundBatchMs === 0
       ? 0
       : positiveInt(fileCfg.inboundBatchMs ?? DEFAULT_INBOUND_BATCH_MS, DEFAULT_INBOUND_BATCH_MS),
+    inboundBatchMaxHoldMs: positiveInt(
+      fileCfg.inboundBatchMaxHoldMs ?? 30_000,
+      30_000,
+    ),
   };
   if (typeof fileCfg.alias === "string" && fileCfg.alias.trim() !== "") cfg.alias = fileCfg.alias;
   if (typeof fileCfg.listen === "string" && parseEndpoint(fileCfg.listen) !== null) cfg.listen = fileCfg.listen;

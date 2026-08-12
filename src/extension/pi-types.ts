@@ -95,7 +95,11 @@ export interface SendMessageOptions {
   deliverAs?: DeliverAs;
 }
 
-export type SessionEventName = "session_start" | "session_shutdown" | "session_before_fork";
+export type SessionEventName =
+  | "session_start"
+  | "session_shutdown"
+  | "session_before_fork"
+  | "tool_result";
 
 export type SessionHookHandler = (
   event: unknown,
@@ -130,6 +134,31 @@ export interface ExtensionAPI {
   /** Session display name — shown in /resume and the session selector (D31). */
   setSessionName?(name: string): void;
   getSessionName?(): string | undefined;
+  /** Register a custom renderer for CustomMessageEntry (D41: colors). */
+  registerMessageRenderer?<T = unknown>(
+    customType: string,
+    renderer: MessageRenderer<T>,
+  ): void;
+}
+
+/** Local theme surface for renderers (D41). */
+export interface RenderTheme {
+  fg(color: ThemeColor, text: string): string;
+}
+
+/** Minimal local surface of pi's MessageRenderer (D41) — a factory that
+ *  receives the custom message + theme and returns the render object. */
+export interface MessageRenderer<T = unknown> {
+  (
+    message: { content?: unknown; details?: T },
+    options: unknown,
+    theme: RenderTheme,
+  ):
+    | {
+        render(width: number): string[];
+        invalidate(): void;
+      }
+    | undefined;
 }
 
 /** Helper: a single-paragraph text tool result. */

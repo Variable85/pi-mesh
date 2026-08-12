@@ -93,7 +93,11 @@ export function attachClientListeners(
   };
   // D40: batch inbound messages over a short window → ONE injection (one
   // turn) for a burst; force/remind bypass the batcher (immediate delivery).
-  const batcher = new InboundBatcher(client.inboundBatchMs, (frames) => {
+  const batcher = new InboundBatcher(
+    client.inboundBatchMs,
+    client.inboundBatchMaxHoldMs,
+    () => rt.ctx?.isIdle?.() === false, // busy = a turn is running (e.g. sleep)
+    (frames: MeshFrame[]) => {
     const batch = buildBatchMessage(frames);
     pi.sendMessage(
       {
@@ -104,7 +108,8 @@ export function attachClientListeners(
       },
       { triggerTurn: true, deliverAs: batch.deliverAs },
     );
-  });
+  },
+  );
   client.on("inbound", (frame: MeshFrame) => {
     if (rt === null) return; // session shutting down
     handleInboundSideEffects(frame, deps);

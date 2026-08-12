@@ -74,47 +74,67 @@ export function buildSingleMessage(frame: MeshFrame): InboundMessage {
 export { priorityRank };
 
 /**
- * D40: accumulates inbound frames over a short window, then injects them as
- * one batched message (single turn). Frames that must not wait (force,
- * remind) bypass the batcher entirely.
+ * D40: accumulates inbound frames and injects them as ONE batched message
+ * (single turn). KEY: while the agent is BUSY (e.g. a long sleep/bash), the
+ * batcher HOLDS the frames — they do not enter pi's queue one by one. When
+ * the busy period ends (tool_result) or the agent turns idle, everything is
+ * flushed as a single injection, so the whole burst lands in the
+ * conversation at once. Frames that must not wait (force, remind) bypass
+ * the batcher entirely.
  */
 export class InboundBatcher {
   private frames: MeshFrame[] = [];
   private timer: NodeJS.Timeout | null = null;
+  private maxTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly windowMs: number,
+    private readonly maxHoldMs: number,
+    private readonly isBusy: () => boolean,
     private readonly onFlush: (frames: MeshFrame[]) => void,
   ) {}
 
   push(frame: MeshFrame): void {
     this.frames.push(frame);
     if (this.timer === null && this.windowMs > 0) {
-      this.timer = setTimeout(() => this.flush(), this.windowMs);
+      this.timer = setTimeout(() => this.onWindow(), this.windowMs);
       this.timer.unref();
     }
   }
 
+  /** The short window elapsed: flush only when the agent is NOT busy —
+   *  otherwise hold (a long tool call is running; more messages may come)
+   *  and arm a max-hold fallback so nothing is retained forever. */
+  private onWindow(): void {
+    this.timer = null;
+    if (this.frames.length === 0) return;
+    if (this.isBusy()) {
+      if (this.maxTimer === null) {
+        this.maxTimer = setTimeout(() => this.flushNow(), this.maxHoldMs);
+        this.maxTimer.unref();
+      }
+      return;
+    }
+    this.flushNow();
+  }
+
+  /** Flush everything now (called on tool_result: the busy period ended). */
   flushNow(): void {
     if (this.timer !== null) {
       clearTimeout(this.timer);
       this.timer = null;
     }
-    this.flush();
-  }
-
-  get pending(): number {
-    return this.frames.length;
-  }
-
-  private flush(): void {
-    if (this.timer !== null) {
-      clearTimeout(this.timer);
-      this.timer = null;
+    if (this.maxTimer !== null) {
+      clearTimeout(this.maxTimer);
+      this.maxTimer = null;
     }
     if (this.frames.length === 0) return;
     const batch = this.frames;
     this.frames = [];
     this.onFlush(batch);
+  }
+
+  get pending(): number {
+    return this.frames.length;
   }
 }
