@@ -42,6 +42,19 @@ duplicates, loops and confusion.
    important), but **never answer with an acknowledgment** — to react
    (question, correction), send a **new message** (`mesh_send`), not a reply.
 
+## Orchestrator rhythm (delay-free)
+
+- **NEVER `sleep` while awaiting replies.** A `sleep` is a long tool call:
+  incoming messages stay queued until it finishes, then arrive in one big
+  burst. Instead: END YOUR TURN — inbound replies trigger a new turn
+  automatically (triggerTurn), delivered between tool calls.
+- **Process replies as they arrive**, one at a time. Do not batch-answer.
+- **`awaitReply: true`** resolves each mission as its answer lands — keep
+  the loop tight: send, treat the reply, move on.
+- **NEVER send acknowledgments** ("received", "thanks", "ok"). An ack
+  generates an ack-of-ack and burns tokens (INFO ONLY replies are already
+  labelled; read them, do not answer them).
+
 ## Anti-loops (orchestrator)
 
 - **`expired` ≠ lost.** A late answer is delivered and injected
