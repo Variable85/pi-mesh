@@ -16,6 +16,7 @@ import { MeshLedger } from "./ledger.js";
 import type { ExtensionAPI } from "./pi-types.js";
 import { findConflict } from "./reservations.js";
 import { registerTools, type MeshRuntime } from "./tools.js";
+import { providerErrorState } from "./provider-errors.js";
 import { MeshTranscript } from "./transcript.js";
 import type { MeshFrame } from "../protocol/envelope.js";
 import type { SessionContext } from "./pi-types.js";
@@ -144,15 +145,33 @@ export default function meshExtension(pi: ExtensionAPI): void {
   // Phase 3: announce turn state to the mesh — busy on the first tool
   // call of a turn, idle when the whole run settles. Only on CHANGE
   // (2 frames per turn, never spams the room).
-    let announcedActivity: "busy" | "idle" | null = null;
-    const announce = (state: "busy" | "idle"): void => {
+    let announcedActivity: "busy" | "idle" | "rate_limited" | "blocked" | null = null;
+    let lastErrorAt = 0;
+    const ERROR_COOLDOWN_MS = 30_000;
+    const announce = (state: "busy" | "idle" | "rate_limited" | "blocked"): void => {
       if (announcedActivity === state) return;
       announcedActivity = state;
       client.sendActivity(state);
     };
     announce("idle"); // present and waiting from the start
     pi.on("tool_call", (_event, _ctx) => announce("busy"));
-    pi.on("agent_settled", (_event, _ctx) => announce("idle"));
+    pi.on("agent_settled", (_event, _ctx) => {
+      // failure states stick for a cooldown — an agent whose provider is
+      // rejecting turns must stay flagged so senders stop reminding; it
+      // flips back to idle once a settle happens WITHOUT a fresh error.
+      if (Date.now() - lastErrorAt > ERROR_COOLDOWN_MS) announce("idle");
+    });
+    // provider error detection: the response status is the ground truth.
+    // TRANSIENT errors (429 rate limit, 408/425, 5xx) mean "retry later" —
+    // peers pause reminders. PERMANENT errors (401/403/404/…) mean the
+    // turn will not succeed by retrying — flagged blocked so peers stop
+    // poking and wait_all reports the real reason.
+    pi.on("after_provider_response", (event, _ctx) => {
+      const state = providerErrorState((event as { status?: number }).status ?? 0);
+      if (state === undefined) return;
+      lastErrorAt = Date.now();
+      announce(state);
+    });
 
   // reservation enforcement: block edit/write on paths another agent
   // has reserved. Runs FIRST (before any other tool handling); the block

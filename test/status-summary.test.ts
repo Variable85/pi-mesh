@@ -35,6 +35,19 @@ describe("buildStatusSummary (Phase 3)", () => {
     assert.equal(s.likelyDone, 1);
   });
 
+  it("rate_limited and blocked peers are counted separately", () => {
+    const peers = [
+      { alias: "a1", activity: { state: "rate_limited" as const, at: iso(1000) } },
+      { alias: "a2", activity: { state: "blocked" as const, at: iso(1000) } },
+      { alias: "a3", activity: { state: "idle" as const, at: iso(1000) } },
+    ];
+    const s = buildStatusSummary(peers, [], 120_000, 900_000, now);
+    assert.equal(s.rateLimited, 1);
+    assert.equal(s.blocked, 1);
+    assert.equal(s.idle, 1);
+    assert.equal(s.likelyDone, 1); // a3 only — failure states are not "done"
+  });
+
   it("announced idle wins over the heuristic (no flicker for old peers)", () => {
     const peers = [
       { alias: "x", activity: { state: "idle" as const, at: iso(30_000) }, lastSeenAt: iso(5_000) },

@@ -30,8 +30,8 @@ export interface MeshPeerInfo {
   reservations?: FileReservation[];
   /** M1: extension version (from the hello frame). */
   clientVersion?: string;
-  /** Phase 3: announced turn state (busy/idle). */
-  activity?: { state: "busy" | "idle"; at: string };
+  /** Announced turn state (busy/idle/rate_limited). */
+  activity?: { state: "busy" | "idle" | "rate_limited" | "blocked"; at: string };
 }
 
 
@@ -456,9 +456,9 @@ export function validateFrame(value: unknown, opts: ValidateOpts = {}): Validati
     }
   }
 
-  // Phase 3: activity announcements — busy/idle with a valid from (rule 2)
+  // activity announcements — busy/idle/rate_limited/blocked with a valid from
   if (value.type === "activity") {
-    if (value.status !== "busy" && value.status !== "idle") {
+    if (value.status !== "busy" && value.status !== "idle" && value.status !== "rate_limited" && value.status !== "blocked") {
       return { ok: false, code: "invalid_frame", detail: "bad activity status" };
     }
     if (typeof value.from !== "string") {

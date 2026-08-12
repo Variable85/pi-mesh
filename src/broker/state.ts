@@ -14,7 +14,7 @@ export interface PeerRecord {
   /** File reservations declared by the peer. Live with the connection. */
   reservations: FileReservation[];
   /** Phase 3: last announced turn state (busy = a turn is running). */
-  activity?: { state: "busy" | "idle"; at: string };
+  activity?: { state: "busy" | "idle" | "rate_limited" | "blocked"; at: string };
 }
 
 export interface StoredMsg {

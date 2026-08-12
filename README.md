@@ -263,7 +263,12 @@ MESH_BROKER_URL=tcp://<machine-A>:8712 MESH_BROKER_TOKEN=change-me pi
 - **Broker down** → tools answer `blocked{broker_unavailable}`, never crash.
 - **Turn state** is announced by each session (busy on the first tool call,
   idle when the run settles) and shared with the room; peers without
-  announcements fall back to the idle/stuck heuristic.
+  announcements fall back to the idle/stuck heuristic. Provider errors are
+  detected from the HTTP status: TRANSIENT ones (429 rate limit, 5xx) flag
+  the agent `⛔ rate-limited` (peers pause reminders — no ping-pong of turns
+  that burn rate-limited requests; `mesh_wait_all` says "retry later");
+  PERMANENT ones (401/403/404…) flag `✖ blocked` (retrying won't heal —
+  needs a human). The flag sticks for a 30 s cooldown after the last error.
 
 ## Platform notes
 

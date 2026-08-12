@@ -419,7 +419,11 @@ async function execMeshStatus(
       if (p.activity !== undefined) {
         const tag = p.activity.state === "busy"
           ? " ● working"
-          : ` ○ idle (since ${localTime(p.activity.at)})`;
+          : p.activity.state === "rate_limited"
+            ? " ⛔ rate-limited"
+            : p.activity.state === "blocked"
+              ? " ✖ blocked (needs intervention)"
+              : ` ○ idle (since ${localTime(p.activity.at)})`;
         return `  @${p.alias} rooms=${p.rooms.join(",")}${v}${skew}${since}${tag}`;
       }
       const act = computePeerStatus(p.lastSeenAt, (p.reservations?.length ?? 0) > 0, rt.client.activityIdleMs, rt.client.activityStuckMs);
@@ -433,7 +437,7 @@ async function execMeshStatus(
   const summary = buildStatusSummary(peers, missions);
   if (summary.total > 0) {
     lines.push(
-      `summary: ${summary.working} working · ${summary.idle} idle · ${summary.stuck} stuck · ${summary.likelyDone} likely done`,
+      `summary: ${summary.working} working · ${summary.idle} idle · ${summary.stuck} stuck · ${summary.rateLimited} rate-limited · ${summary.blocked} blocked · ${summary.likelyDone} likely done`,
     );
   }
   // M2: broker counters — relayed/refused/mailbox at a glance
@@ -526,11 +530,13 @@ export interface StatusSummary {
   working: number;
   idle: number;
   stuck: number;
+  rateLimited: number;
+  blocked: number;
   likelyDone: number;
 }
 
 export function buildStatusSummary(
-  peers: { alias: string; activity?: { state: "busy" | "idle"; at: string }; reservations?: { pattern: string }[]; lastSeenAt?: string }[],
+  peers: { alias: string; activity?: { state: "busy" | "idle" | "rate_limited" | "blocked"; at: string }; reservations?: { pattern: string }[]; lastSeenAt?: string }[],
   missions: { to: string; status: string }[],
   idleMs = 120_000,
   stuckMs = 900_000,
@@ -542,11 +548,21 @@ export function buildStatusSummary(
   let working = 0;
   let idle = 0;
   let stuck = 0;
+  let rateLimited = 0;
+  let blocked = 0;
   let likelyDone = 0;
   for (const p of peers) {
     if (p.activity !== undefined) {
       if (p.activity.state === "busy") {
         working += 1;
+        continue;
+      }
+      if (p.activity.state === "rate_limited") {
+        rateLimited += 1;
+        continue;
+      }
+      if (p.activity.state === "blocked") {
+        blocked += 1;
         continue;
       }
       idle += 1;
@@ -562,7 +578,7 @@ export function buildStatusSummary(
       if (!waitingOn.has(p.alias)) likelyDone += 1;
     }
   }
-  return { total: peers.length, working, idle, stuck, likelyDone };
+  return { total: peers.length, working, idle, stuck, rateLimited, blocked, likelyDone };
 }
 
 /** Local HH:MM:SS from an ISO timestamp (best effort, display only). */
@@ -596,7 +612,14 @@ async function execMeshWaitAll(
     lines.push(`  ✓ @${a.to}: ${body.slice(0, 140)}`);
   }
   for (const m of res.missing) {
-    lines.push(`  ✗ @${m.to}: NOT ANSWERED (${m.msgId.slice(0, 18)})`);
+    const act = rt.client.activityOf(m.to)?.state;
+    const reason =
+      act === "rate_limited"
+        ? " — rate-limited, retry later"
+        : act === "blocked"
+          ? " — blocked (provider error, needs intervention)"
+          : "";
+    lines.push(`  ✗ @${m.to}: NOT ANSWERED (${m.msgId.slice(0, 18)})${reason}`);
   }
   if (res.total === 0) lines.push("  (no awaited missions — send with awaitReply: true first)");
   // display the colored verdict entry (agent colors + agent-color backgrounds)

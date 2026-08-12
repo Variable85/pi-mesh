@@ -112,7 +112,7 @@ export function peersSnapshot(state: BrokerState, roomId?: string): {
   lastSeenAt?: string;
   reservations?: FileReservation[];
   clientVersion?: string;
-  activity?: { state: "busy" | "idle"; at: string };
+  activity?: { state: "busy" | "idle" | "rate_limited" | "blocked"; at: string };
 }[] {
   const out: {
     alias: string;
@@ -122,7 +122,7 @@ export function peersSnapshot(state: BrokerState, roomId?: string): {
     lastSeenAt?: string;
     reservations?: FileReservation[];
     clientVersion?: string;
-    activity?: { state: "busy" | "idle"; at: string };
+    activity?: { state: "busy" | "idle" | "rate_limited" | "blocked"; at: string };
   }[] = [];
   for (const peer of state.peers.values()) {
     if (!peer.helloDone) continue;

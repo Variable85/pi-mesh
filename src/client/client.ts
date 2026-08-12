@@ -248,8 +248,8 @@ export class MeshClient extends EventEmitter {
   private static readonly READBY_DROP = 50;
   /** Latest known reservations per peer, fed by welcome/reserve broadcasts. */
   private readonly peerReservations = new Map<string, FileReservation[]>();
-  /** Phase 3: latest announced turn state per peer (activity frames). */
-  private readonly peerActivity = new Map<string, { state: "busy" | "idle"; at: string }>();
+  /** Latest announced turn state per peer (activity frames). */
+  private readonly peerActivity = new Map<string, { state: "busy" | "idle" | "rate_limited" | "blocked"; at: string }>();
   /**
   * replyTo msgIds already answered/handled: the FIRST reply to a given
   * message is consumed (pending match) or injected (orphan); later replies
@@ -449,17 +449,17 @@ export class MeshClient extends EventEmitter {
     };
   }
 
-  /** Phase 3: announce this session's turn state to the mesh (busy on
-  *  tool_call, idle on agent_settled). Fire-and-forget; the broker shares
-  *  it with room members and status snapshots. */
-  sendActivity(state: "busy" | "idle"): void {
+  /** Announce this session's turn state to the mesh (busy on tool_call,
+  *  idle on agent_settled, rate_limited on provider 429s). Fire-and-forget;
+  *  the broker shares it with room members and status snapshots. */
+  sendActivity(state: "busy" | "idle" | "rate_limited" | "blocked"): void {
     if (!this.online) return;
     const frame = buildFrame({ type: "activity", from: this.alias, status: state });
     this.writeOrQueue(frame);
   }
 
-  /** Phase 3: last known turn state of a peer (from snapshots/activity). */
-  activityOf(alias: string): { state: "busy" | "idle"; at: string } | undefined {
+  /** Last known turn state of a peer (from snapshots/activity frames). */
+  activityOf(alias: string): { state: "busy" | "idle" | "rate_limited" | "blocked"; at: string } | undefined {
     return this.peerActivity.get(alias);
   }
 
@@ -873,8 +873,8 @@ export class MeshClient extends EventEmitter {
         break;
       }
       case "activity": {
-  // Phase 3: a peer announced busy/idle — cache it (status/HUD read it)
-        if (frame.from !== undefined && (frame.status === "busy" || frame.status === "idle")) {
+        // a peer announced busy/idle/rate_limited — cache it (status/HUD)
+        if (frame.from !== undefined && (frame.status === "busy" || frame.status === "idle" || frame.status === "rate_limited" || frame.status === "blocked")) {
           this.peerActivity.set(frame.from, { state: frame.status, at: frame.ts });
         }
         this.emit("frame", frame);
@@ -1193,10 +1193,17 @@ export class MeshClient extends EventEmitter {
     };
   }
 
-  /** client-side remind, broker stays mute. Max 2 enforced by PendingReplies. */
+  /** client-side remind, broker stays mute. Max 2 enforced by PendingReplies.
+   *  Skips a rate-limited target: poking a peer whose provider rejects every
+   *  turn (429) only burns turns — the mission stays pending and wait_all
+   *  reports the real reason. */
   private sendRemind(msgId: string): void {
     const target = this.awaitTargets.get(msgId);
     if (!target) return;
+    // skip BOTH failure states: transient (rate_limited) and permanent
+    // (blocked — auth errors etc. won't heal by poking)
+    const act = this.peerActivity.get(target.to)?.state;
+    if (act === "rate_limited" || act === "blocked") return;
     const frame = buildFrame({
       type: "remind",
       id: msgId,

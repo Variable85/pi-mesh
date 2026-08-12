@@ -147,7 +147,8 @@ export type SessionEventName =
   | "session_shutdown"
   | "session_before_fork"
   | "tool_result"
-  | "agent_settled"; // Phase 3: turn finished → announce idle
+  | "agent_settled" // turn finished → announce idle
+  | "after_provider_response"; // provider HTTP status (429 detection)
 
 export type SessionHookHandler = (
   event: unknown,

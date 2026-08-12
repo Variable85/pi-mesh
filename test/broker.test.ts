@@ -501,3 +501,29 @@ describe("activity announcements (Phase 3)", () => {
     assert.equal(parsed.ok, false);
   });
 });
+
+describe("blocked activity state (provider errors)", () => {
+  it("rate_limited and blocked are accepted and shared with room members", async (t) => {
+    const { sock } = await withBroker(t);
+    const alice = trackRaw(t, await RawClient.connect(sock));
+    alice.hello("rl-a");
+    await alice.waitFrame((f) => f.type === "welcome");
+    const bob = trackRaw(t, await RawClient.connect(sock));
+    bob.hello("rl-b");
+    await bob.waitFrame((f) => f.type === "welcome");
+    alice.send({ type: "activity", from: "rl-a", status: "rate_limited" });
+    await bob.waitFrame((f) => f.type === "activity" && f.from === "rl-a" && f.status === "rate_limited");
+    alice.send({ type: "activity", from: "rl-a", status: "blocked" });
+    await bob.waitFrame((f) => f.type === "activity" && f.from === "rl-a" && f.status === "blocked");
+    bob.send({ type: "status_req", from: "rl-b" });
+    const res = await bob.waitFrame((f) => f.type === "status_res");
+    const a = res.peers!.find((p) => p.alias === "rl-a");
+    assert.equal(a?.activity?.state, "blocked");
+  });
+
+  it("unknown activity statuses are refused", () => {
+    const bad = buildFrame({ type: "activity", from: "rl-x", status: "asleep" });
+    const parsed = parseFrameLine(JSON.stringify(bad));
+    assert.equal(parsed.ok, false);
+  });
+});

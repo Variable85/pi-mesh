@@ -469,7 +469,14 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
       case "activity": {
   // Phase 3: the peer announces its turn state — stored, then shared
   // with the members of every room it belongs to (fire-and-forget).
-        const actState: "busy" | "idle" = frame.status === "busy" ? "busy" : "idle";
+        const actState: "busy" | "idle" | "rate_limited" | "blocked" =
+          frame.status === "busy"
+            ? "busy"
+            : frame.status === "rate_limited"
+              ? "rate_limited"
+              : frame.status === "blocked"
+                ? "blocked"
+                : "idle";
         peer.activity = { state: actState, at: new Date().toISOString() };
         for (const roomId of peer.rooms.keys()) {
           broadcastToRoom(
