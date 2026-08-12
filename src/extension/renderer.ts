@@ -153,6 +153,51 @@ export function ansiBackground(color: ThemeColor, theme: RenderTheme): string | 
   return fg.replace("38", "48");
 }
 
+/** Standard xterm 256-color palette (base 16 + 6×6×6 cube + 24 grays). */
+const XTERM_256: [number, number, number][] = (() => {
+  const base: [number, number, number][] = [
+    [0, 0, 0], [128, 0, 0], [0, 128, 0], [128, 128, 0],
+    [0, 0, 128], [128, 0, 128], [0, 128, 128], [192, 192, 192],
+    [128, 128, 128], [255, 0, 0], [0, 255, 0], [255, 255, 0],
+    [0, 0, 255], [255, 0, 255], [0, 255, 255], [255, 255, 255],
+  ];
+  const cube: [number, number, number][] = [];
+  for (const r of [0, 95, 135, 175, 215, 255]) {
+    for (const g of [0, 95, 135, 175, 215, 255]) {
+      for (const b of [0, 95, 135, 175, 215, 255]) cube.push([r, g, b]);
+    }
+  }
+  const grays: [number, number, number][] = [];
+  for (let i = 0; i < 24; i += 1) {
+    const v = 8 + 10 * i;
+    grays.push([v, v, v]);
+  }
+  return [...base, ...cube, ...grays];
+})();
+
+/** Parse an ANSI color code (`38|48;5;N` or `38|48;2;R;G;B`) into RGB —
+ *  accepts foreground AND background variants (the verdict passes the
+ *  background code). */
+export function ansiToRgb(ansi: string): { r: number; g: number; b: number } | undefined {
+  const m256 = /\x1b\[(?:38|48);5;(\d{1,3})m/.exec(ansi);
+  if (m256 !== null) {
+    const idx = Number(m256[1]);
+    const c = XTERM_256[idx];
+    if (c === undefined) return undefined;
+    return { r: c[0], g: c[1], b: c[2] };
+  }
+  const mTrue = /\x1b\[(?:38|48);2;(\d{1,3});(\d{1,3});(\d{1,3})m/.exec(ansi);
+  if (mTrue !== null) {
+    return { r: Number(mTrue[1]), g: Number(mTrue[2]), b: Number(mTrue[3]) };
+  }
+  return undefined;
+}
+
+/** Perceptual luminance 0..1 — 0.5+ means a LIGHT background. */
+export function luminance(rgb: { r: number; g: number; b: number }): number {
+  return (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
+}
+
 /** One verdict line: text in the agent's fg color, FULL-WIDTH background in
  *  the agent's color (padded to `width`). */
 function verdictLine(
@@ -165,12 +210,17 @@ function verdictLine(
   const color = agentColor(to);
   const body = `${marker} @${to}: ${text}`;
   const bg = ansiBackground(color, theme);
-  // readable: neutral text on the agent-colored background; without a theme
-  // the agent color is used for the text (plain background)
+  // without a theme the agent color is used for the text (plain background)
   if (bg === undefined) return theme.fg(color, body);
-  const colored = theme.fg("text", body);
-  const vis = visibleWidth(colored);
-  return `${bg}${colored}${" ".repeat(Math.max(0, width - vis))}\x1b[49m`;
+  // adaptive contrast: dark text on LIGHT agent backgrounds, light text on
+  // DARK ones — always readable
+  const rgb = ansiToRgb(bg);
+  const fgCode =
+    rgb !== undefined && luminance(rgb) > 0.5
+      ? "\x1b[38;5;232m" // near-black
+      : "\x1b[38;5;255m"; // near-white
+  const vis = visibleWidth(body);
+  return `${bg}${fgCode}${body}${" ".repeat(Math.max(0, width - vis))}\x1b[39m\x1b[49m`;
 }
 
 /** The wait_all verdict rendered as a colored entry: header in accent on the
@@ -195,11 +245,22 @@ export function renderVerdictEntry(
     out.push("");
     out.push(theme.fg("accent", head));
   }
+  // one line per agent, each separated by an empty neutral line (breathing
+  // room between the colored blocks)
+  const entries: string[] = [];
   for (const a of data?.answers ?? []) {
-    out.push(verdictLine("✓", a.to, a.response.replace(/\s+/g, " ").trim().slice(0, 120), width, theme));
+    entries.push(verdictLine("✓", a.to, a.response.replace(/\s+/g, " ").trim().slice(0, 120), width, theme));
   }
   for (const m of data?.missing ?? []) {
-    out.push(verdictLine("✗", m.to, `NOT ANSWERED (${m.msgId.slice(0, 18)})`, width, theme));
+    entries.push(verdictLine("✗", m.to, `NOT ANSWERED (${m.msgId.slice(0, 18)})`, width, theme));
+  }
+  for (let i = 0; i < entries.length; i += 1) {
+    if (i > 0 && bg !== undefined) {
+      out.push(bg("customMessageBg", " ".repeat(Math.max(0, width))));
+    } else if (i > 0) {
+      out.push("");
+    }
+    out.push(entries[i]!);
   }
   return out;
 }

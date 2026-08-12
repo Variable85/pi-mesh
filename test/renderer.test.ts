@@ -120,11 +120,41 @@ describe("verdict entry (mesh-verdict, agent-colored backgrounds)", () => {
     assert.ok(lines[0]!.includes("<bg:customMessageBg>"), "empty line above the header");
     assert.ok(lines[1]!.includes("<bg:customMessageBg>"), "header on the neutral box bg");
     const a3 = lines.find((l) => l.includes("@agent-3"))!;
-    assert.ok(a3.includes("<fg:text>"), "agent-3 line text is READABLE (neutral text color)");
     assert.ok(a3.includes(`\x1b[48;5;${c3.length}m`), "agent-3 color as BACKGROUND (38→48)");
     const a7 = lines.find((l) => l.includes("@agent-7"))!;
     assert.ok(a7.includes(`\x1b[48;5;${c7.length}m`), "agent-7 color as BACKGROUND");
     assert.ok(a7.includes("NOT ANSWERED"), "missing marker");
+  });
+
+  it("adaptive contrast: light background → dark text, dark background → light text", () => {
+    const lightTheme = {
+      fg: (c: string, t: string) => `<fg:${c}>${t}</fg:${c}>`,
+      bg: (c: string, t: string) => `<bg:${c}>${t}</bg:${c}>`,
+      fgAnsi: () => "\x1b[38;5;15m", // white — LIGHT background
+    };
+    const darkTheme = {
+      fg: (c: string, t: string) => `<fg:${c}>${t}</fg:${c}>`,
+      bg: (c: string, t: string) => `<bg:${c}>${t}</bg:${c}>`,
+      fgAnsi: () => "\x1b[38;5;21m", // blue — DARK background
+    };
+    const light = renderVerdictEntry({ answers: [{ to: "agent-3", response: "x" }] }, 40, lightTheme as never);
+    const dark = renderVerdictEntry({ answers: [{ to: "agent-3", response: "x" }] }, 40, darkTheme as never);
+    const lightLine = light.find((l) => l.includes("@agent-3"))!;
+    const darkLine = dark.find((l) => l.includes("@agent-3"))!;
+    assert.ok(lightLine.includes("\x1b[38;5;232m"), "light bg → near-black text");
+    assert.ok(darkLine.includes("\x1b[38;5;255m"), "dark bg → near-white text");
+  });
+
+  it("empty neutral line between the answer lines", () => {
+    const lines = renderVerdictEntry(
+      { head: "2/2 answered", answers: [{ to: "agent-3", response: "a" }, { to: "agent-7", response: "b" }] },
+      40,
+      verdictTheme as never,
+    );
+    // layout: empty, header, empty, line, EMPTY, line
+    const gap = lines[4]!;
+    assert.ok(gap.includes("<bg:customMessageBg>"), "spacing line between the two answers");
+    assert.ok(!gap.includes("@agent-"), "spacing line is empty (no agent text)");
   });
 
   it("falls back to plain colored lines without a theme", () => {

@@ -131,7 +131,9 @@ and in the bundled skill):
    before the call are included; already-verdict'd missions are never
    re-listed. The verdict is ALSO rendered in the conversation as a colored
    entry: every line with the answering agent's color as the full-width
-   background and readable neutral text (display-only, zero LLM tokens).
+   background and ADAPTIVE text (dark on light backgrounds, light on dark
+   ones — always readable), separated by empty lines (display-only, zero
+   LLM tokens).
 3. Re-send ONLY to the missing (`✗ NOT ANSWERED`). Never poll with
    `mesh_history`.
 
