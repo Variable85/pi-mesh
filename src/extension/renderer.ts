@@ -164,12 +164,13 @@ function verdictLine(
 ): string {
   const color = agentColor(to);
   const body = `${marker} @${to}: ${text}`;
-  const colored = theme.fg(color, body);
   const bg = ansiBackground(color, theme);
-  if (bg === undefined) return colored;
+  // readable: neutral text on the agent-colored background; without a theme
+  // the agent color is used for the text (plain background)
+  if (bg === undefined) return theme.fg(color, body);
+  const colored = theme.fg("text", body);
   const vis = visibleWidth(colored);
-  const padded = `${bg}${colored}${" ".repeat(Math.max(0, width - vis))}\x1b[49m`;
-  return padded;
+  return `${bg}${colored}${" ".repeat(Math.max(0, width - vis))}\x1b[49m`;
 }
 
 /** The wait_all verdict rendered as a colored entry: header in accent on the
@@ -183,12 +184,15 @@ export function renderVerdictEntry(
   const head = data?.head ?? "wait_all";
   const out: string[] = [];
   const pad = (l: string): string => `${l}${" ".repeat(Math.max(0, width - visibleWidth(l)))}`;
-  // header on the neutral box background
+  // header on the neutral box background, with an empty line ABOVE (the
+  // entry must not touch the previous content) and BELOW (before the lines)
   const bg = theme.bg;
   if (bg !== undefined) {
+    out.push(bg("customMessageBg", " ".repeat(Math.max(0, width))));
     out.push(bg("customMessageBg", pad(theme.fg("accent", `▚ ${head}`))));
     out.push(bg("customMessageBg", " ".repeat(Math.max(0, width))));
   } else {
+    out.push("");
     out.push(theme.fg("accent", head));
   }
   for (const a of data?.answers ?? []) {

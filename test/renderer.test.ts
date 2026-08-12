@@ -117,9 +117,10 @@ describe("verdict entry (mesh-verdict, agent-colored backgrounds)", () => {
     );
     const c3 = agentColor("agent-3");
     const c7 = agentColor("agent-7");
-    assert.ok(lines[0]!.includes("<bg:customMessageBg>"), "header on the neutral box bg");
+    assert.ok(lines[0]!.includes("<bg:customMessageBg>"), "empty line above the header");
+    assert.ok(lines[1]!.includes("<bg:customMessageBg>"), "header on the neutral box bg");
     const a3 = lines.find((l) => l.includes("@agent-3"))!;
-    assert.ok(a3.includes(`<fg:${c3}>`), "agent-3 line in its fg color");
+    assert.ok(a3.includes("<fg:text>"), "agent-3 line text is READABLE (neutral text color)");
     assert.ok(a3.includes(`\x1b[48;5;${c3.length}m`), "agent-3 color as BACKGROUND (38→48)");
     const a7 = lines.find((l) => l.includes("@agent-7"))!;
     assert.ok(a7.includes(`\x1b[48;5;${c7.length}m`), "agent-7 color as BACKGROUND");
