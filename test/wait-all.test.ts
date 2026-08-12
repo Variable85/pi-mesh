@@ -88,6 +88,51 @@ describe("waitAll (D42)", () => {
     assert.ok(silent !== undefined, "bob mission tracked as waiting");
     assert.ok(done !== undefined, "carol mission tracked as answered");
   });
+  it("launch mode (block:false) returns immediately and wait_all reports the verdict", async () => {
+    lead.cancelAllAwaited();
+    bob.removeAllListeners("inbound");
+    carol.removeAllListeners("inbound");
+    carol.on("inbound", (f: MeshFrame) => {
+      if (f.type === "msg") void carol.reply(f.id, "carol launch done");
+    });
+    const t0 = Date.now();
+    const r1 = await lead.send({ to: "carol", message: "fast", awaitReply: true, block: false, timeoutMs: 30_000 });
+    const r2 = await lead.send({ to: "bob", message: "slow", awaitReply: true, block: false, timeoutMs: 30_000 });
+    assert.equal(r1.status, "delivered");
+    assert.equal(r2.status, "delivered");
+    assert.ok(Date.now() - t0 < 2000, "launch must NOT block for the replies");
+    const res = await lead.waitAll(2500);
+    assert.equal(res.status, "timeout", "bob stays silent");
+    assert.ok(res.answers.some((a) => a.to === "carol" && a.response === "carol launch done"), "fast answer in the verdict");
+    assert.ok(res.missing.some((m) => m.to === "bob"), "slow mission reported missing");
+  });
+
+  it("a mission answered BEFORE wait_all still appears in the verdict", async () => {
+    lead.cancelAllAwaited();
+    bob.removeAllListeners("inbound");
+    carol.removeAllListeners("inbound");
+    carol.on("inbound", (f: MeshFrame) => {
+      if (f.type === "msg") void carol.reply(f.id, "early done");
+    });
+    const r = await lead.send({ to: "carol", message: "early", awaitReply: true, block: false, timeoutMs: 30_000 });
+    assert.equal(r.status, "delivered");
+    // wait until the answer actually arrived (background resolution)
+    await waitFor(() => {
+      const m = lead.missionStatus().find((x) => x.msgId === r.msgId);
+      return m !== undefined && m.answered ? true : undefined;
+    });
+    const res = await lead.waitAll(500);
+    assert.equal(res.status, "complete");
+    assert.equal(res.total, 1, "answered-before-call mission is still in the verdict");
+    assert.equal(res.answered, 1);
+  });
+
+  it("block:false without awaitReply is refused", async () => {
+    const r = await lead.send({ to: "carol", message: "x", block: false });
+    assert.equal(r.status, "error");
+    assert.match(r.reason ?? "", /block_requires_awaitReply/);
+  });
+
   it("missions blocked at ack are 'failed', never 'waiting' forever", async () => {
     const res = await lead.send({ to: "ghost-peer", message: "nobody home", awaitReply: true, timeoutMs: 500 });
     assert.equal(res.status, "blocked");

@@ -42,14 +42,23 @@ duplicates, loops and confusion.
    important), but **never answer with an acknowledgment** — to react
    (question, correction), send a **new message** (`mesh_send`), not a reply.
 
-## Group waiting (delay-free)
+## Launch a burst, then wait_all (delay-free, general pattern)
 
-- **`mesh_wait_all { timeoutMs }`**: after sending missions with
-  `awaitReply: true`, call it instead of sleeping or polling. The turn is
-  suspended inside the tool call; it returns the honest group summary:
-  who answered (with the answer), who is missing. Re-send ONLY to the
-  missing ones.
-- `mesh_status` shows `missions:` (✓ answered / ✗ waiting) per mission.
+1. **Launch** every mission with `awaitReply: true, block: false` — the
+   tool returns `delivered` immediately and the mission stays tracked in
+   the background (reminds, expiry, answers). A burst of N missions costs
+   one turn, not N blocking calls.
+2. **`mesh_wait_all { timeoutMs }`** — the turn is suspended INSIDE the
+   tool call (no sleep, no polling). It returns the honest group verdict:
+   who answered (with the answer), who is missing. Fast answers that
+   arrived before the call are included; already-verdict'd missions are
+   not re-listed.
+3. Re-send ONLY to the missing (`✗ NOT ANSWERED`).
+- Never poll with `mesh_history`/`mesh_status` to check who answered —
+  that is what `mesh_wait_all` is for.
+- `block: false` without `awaitReply` is refused; `awaitReply` without
+  `block: false` blocks the turn until that one reply (fine for a single
+  awaited send).
 
 ## Orchestrator rhythm (delay-free)
 

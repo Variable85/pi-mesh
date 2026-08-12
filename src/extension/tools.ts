@@ -115,6 +115,13 @@ const MESH_SEND_PARAMETERS: Record<string, unknown> = {
       description: "Required when priority=force. Hashed (reasonHash), never persisted.",
     },
     awaitReply: { type: "boolean", description: "Wait for an explicit mesh_reply (default false)." },
+    block: {
+      type: "boolean",
+      description: "D46: with awaitReply — false = LAUNCH mode: return the delivery " +
+        "result immediately, keep the mission tracked in the background, and " +
+        "call mesh_wait_all for the group verdict. Default true (blocks until " +
+        "the reply or the timeout).",
+    },
     timeoutMs: {
       type: "number",
       minimum: MIN_AWAIT_REPLY_TIMEOUT_MS,
@@ -157,6 +164,8 @@ async function execMeshSend(
   const priority = (str(params.priority) ?? "normal") as MeshPriority;
   const reason = str(params.reason);
   const awaitReply = params.awaitReply === true;
+  const block = params.block === false ? false : true;
+  const launch = awaitReply && !block; // D46: track + return immediately
   const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : undefined;
   const refs = Array.isArray(params.refs)
     ? params.refs.filter((r): r is string => typeof r === "string")
@@ -194,7 +203,7 @@ async function execMeshSend(
 
   const res = await rt.client.send({
     to: broadcast ? undefined : to,
-    message, room, priority, reason, awaitReply, timeoutMs, refs, broadcast,
+    message, room, priority, reason, awaitReply, block, timeoutMs, refs, broadcast,
   });
 
   // C5: `delivered` is ledgered ONLY here — after the broker ack (client.send
@@ -236,7 +245,12 @@ async function execMeshSend(
     reason: "reason" in res ? res.reason : undefined,
   });
   if (guard.warnings.includes(LOOP_GUARD_WARNING)) details.loopGuard = "matched";
-  return textResult(resultText(res), details);
+  // D46: launch-mode hint so the agent knows the verdict comes from wait_all
+  const hint =
+    launch && (res.status === "delivered" || res.status === "queued_offline")
+      ? ` (mission tracked — use mesh_wait_all for the group verdict)`
+      : "";
+  return textResult(`${resultText(res)}${hint}`, details);
 }
 
 // ---------------------------------------------------------------- mesh_reply

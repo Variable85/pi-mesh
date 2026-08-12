@@ -200,7 +200,10 @@ export function attachClientListeners(
       `[mesh] you are @${client.alias} (rooms: ${roomList}). ` +
       `${peerLine}${farLine} ` +
       `mesh_send/mesh_reply to talk, mesh_status for a live snapshot, ` +
-      `mesh_reserve to claim files before editing them.`;
+      `mesh_reserve to claim files before editing them. ` +
+      // D46: the general orchestrator pattern — launch bursts, wait_all once
+      `Mission bursts: mesh_send(..., awaitReply: true, block: false) then ` +
+      `mesh_wait_all for the group verdict — never mesh_history to check.`;
     // D30: a /mesh new handoff may carry the previous session's history —
     // inject it as context so the fresh conversation keeps the thread.
     if (rt.pendingHistory !== undefined && rt.pendingHistory.length > 0) {

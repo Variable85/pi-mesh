@@ -296,6 +296,15 @@ differs from the broker's (stale sessions at a glance). `mesh_status`
 also shows the broker counters (relayed/refused/mailbox). Inbound
 messages now carry the local arrival time in their prefix (HH:MM:SS).
 
+**Launch + wait_all (D46)**: the general orchestrator pattern — send a
+mission burst with `awaitReply: true, block: false` (each send returns
+`delivered` immediately, the mission stays tracked in the background with
+reminds/expiry), then ONE `mesh_wait_all` for the honest group verdict
+(who answered with the answer, who is missing; fast answers that arrived
+before the call are included; already-verdict'd missions are never
+re-listed). No sleep, no polling, no `mesh_history` checks. The pattern
+is injected in the session identity context and in the skill.
+
 **Boxed rendering (D45)**: mesh messages (simple, batches, live entries)
 are rendered INSIDE the pi custom-message box again — background
 customMessageBg (the purple frame), label `[mesh-inbound]`, padding —

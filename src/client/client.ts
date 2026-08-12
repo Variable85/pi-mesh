@@ -63,6 +63,11 @@ export interface SendOpts {
   priority?: MeshPriority;
   reason?: string; // force only — hashed, never persisted (§6.6)
   awaitReply?: boolean;
+  /** D46: with awaitReply — return the delivery result IMMEDIATELY and keep
+   *  the mission tracked in the background (reminds, expiry, answered);
+   *  mesh_wait_all reports the group verdict later. The general
+   *  orchestrator pattern: launch a burst, then wait_all once. */
+  block?: boolean;
   timeoutMs?: number;
   refs?: string[];
   /** D24: fan out to every room member (room required, to must be absent). */
@@ -157,6 +162,11 @@ const ALIAS_RETRY_DELAY_MS = 250;
 /** D25: a reply target stays "handled" for 30 min (duplicates dropped). */
 const HANDLED_REPLY_WINDOW_MS = 1_800_000;
 
+/** D46: a mission answered within this window and not yet reported by a
+ *  wait_all verdict still belongs to the current batch — a fast answer
+ *  that resolved BEFORE wait_all was called must still appear in it. */
+const RECENT_ANSWER_WINDOW_MS = 300_000; // 5 min
+
 export interface WaitAllSummary {
   status: "complete" | "timeout";
   total: number;
@@ -226,6 +236,9 @@ export class MeshClient extends EventEmitter {
       at?: string;
     }
   >();
+  /** D46: missions already reported by a wait_all verdict — never re-listed
+   *  by a later wait_all (each batch is summarized once). */
+  private readonly reportedMissions = new Set<string>();
   /** B4: inbox/receipt/mission history caps (Map insertion order = age). */
   private static readonly MISSION_CAP = 200;
   private static readonly MISSION_DROP = 50;
@@ -302,7 +315,9 @@ export class MeshClient extends EventEmitter {
 
   // ---- D42: awaited missions (mesh_wait_all) ----
 
-  /** D42: cancel every pending awaited mission (e.g. before a reset). */
+  /** D42: cancel every pending awaited mission (e.g. before a reset).
+   *  awaitedMissions is wiped here, so recently-answered missions of past
+   *  batches cannot leak into the next wait_all verdict. */
   cancelAllAwaited(): void {
     for (const id of [...this.awaitTargets.keys()]) {
       this.awaitedMissions.delete(id);
@@ -356,23 +371,47 @@ export class MeshClient extends EventEmitter {
    * return the honest group summary. The turn is suspended inside this tool
    * call — no sleep, no wasted tokens; inbound replies keep flowing and the
    * batch is delivered right after the result.
+   * D46 snapshot: still-pending missions (awaitTargets) PLUS missions
+   * answered recently (≤ 5 min) that no previous verdict reported yet — a
+   * fast answer that resolved before this call must still be in the summary.
    */
   async waitAll(timeoutMs: number): Promise<WaitAllSummary> {
     const start = Date.now();
     const deadline = start + Math.max(25, timeoutMs);
-    // snapshot the missions that are STILL PENDING at call time (awaitTargets
-    // drops a mission once its send() resolved) — historical answered ones
-    // do not count.
-    const targets = [...this.awaitTargets.keys()];
+    const now = Date.now();
+    const targets = new Set<string>(this.awaitTargets.keys());
+    for (const [id, m] of this.awaitedMissions) {
+      if (m.status !== "answered" || m.at === undefined) continue;
+      if (this.reportedMissions.has(id)) continue;
+      if (now - Date.parse(m.at) <= RECENT_ANSWER_WINDOW_MS) targets.add(id);
+    }
+    const targetList = [...targets];
     return new Promise((resolve) => {
+      const finish = (status: "complete" | "timeout"): void => {
+        // D46: answered missions of this verdict are reported once — a
+        // later wait_all (next batch) must not re-list them. Missions still
+        // missing stay reportable (the agent may wait again for them).
+        for (const id of targetList) {
+          if (this.awaitedMissions.get(id)?.answered === true) this.reportedMissions.add(id);
+        }
+        if (this.reportedMissions.size > 512) {
+          let dropped = 0;
+          for (const id of this.reportedMissions) {
+            if (dropped >= 256) break;
+            this.reportedMissions.delete(id);
+            dropped += 1;
+          }
+        }
+        resolve(this.summarize(start, status, targetList));
+      };
       const tick = (): void => {
-        const missing = targets.filter((id) => this.awaitedMissions.get(id)?.answered !== true);
+        const missing = targetList.filter((id) => this.awaitedMissions.get(id)?.answered !== true);
         if (missing.length === 0) {
-          resolve(this.summarize(start, "complete", targets));
+          finish("complete");
           return;
         }
         if (Date.now() >= deadline) {
-          resolve(this.summarize(start, "timeout", targets));
+          finish("timeout");
           return;
         }
         const t = setTimeout(tick, 200);
@@ -905,6 +944,12 @@ export class MeshClient extends EventEmitter {
     if (priority === "force" && (opts.reason === undefined || opts.reason.trim() === "")) {
       return { status: "error", reason: "force_requires_reason" }; // E13
     }
+    // D46: block:false is ONLY meaningful with awaitReply — a fire-and-forget
+    // send has nothing for wait_all to track.
+    const launch = opts.awaitReply === true && opts.block === false;
+    if (opts.block === false && opts.awaitReply !== true) {
+      return { status: "error", reason: "block_requires_awaitReply" };
+    }
     const timeoutMs = Math.min(
       MAX_AWAIT_REPLY_TIMEOUT_MS,
       Math.max(MIN_AWAIT_REPLY_TIMEOUT_MS, opts.timeoutMs ?? DEFAULT_AWAIT_REPLY_TIMEOUT_MS),
@@ -981,6 +1026,41 @@ export class MeshClient extends EventEmitter {
       }
       // N2: an unknown/unexpected ack status (e.g. dropped_offline on a msg)
       // is an honest error — never misreported as delivered.
+      return {
+        status: "error",
+        msgId: frame.id,
+        reason: `unexpected_ack_status: ${ack.status ?? "missing"}`,
+      };
+    }
+
+    // D46: LAUNCH mode — the delivery result returns immediately; the
+    // pending stays live in the background (reminds at T/2 & 3T/4, expiry,
+    // answered tracking) and mesh_wait_all reports the group verdict later.
+    if (launch) {
+      void pendingPromise.then((resolution) => {
+        this.awaitTargets.delete(frame.id);
+        if (resolution.kind === "expired") {
+          const m = this.awaitedMissions.get(frame.id);
+          if (m !== undefined) m.status = "expired"; // B3 in the background too
+          this.emit("expired", { msgId: frame.id });
+        }
+      });
+      if (ack.status === "delivered") {
+        return {
+          status: "delivered",
+          msgId: frame.id,
+          deliveredCount: ack.deliveredCount,
+          totalCount: ack.totalCount,
+        };
+      }
+      if (ack.status === "queued_offline") {
+        return {
+          status: "queued_offline",
+          msgId: frame.id,
+          deliveredCount: ack.deliveredCount,
+          totalCount: ack.totalCount,
+        };
+      }
       return {
         status: "error",
         msgId: frame.id,
