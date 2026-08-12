@@ -1,7 +1,7 @@
 // test/renderer.test.ts — D41: colored rendering (aliases in accent, batch header).
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { colorizeAliases, renderLiveEntry, renderMeshInbound } from "../src/extension/renderer.js";
+import { colorizeAliases, renderLiveEntry, renderMeshInbound, renderVerdictEntry } from "../src/extension/renderer.js";
 
 import { agentColor } from "../src/extension/colors.js";
 
@@ -99,5 +99,40 @@ describe("boxed rendering (D45)", () => {
     const lines = renderMeshInbound("plain", undefined, 20, theme as never);
     assert.equal(lines.length, 1);
     assert.equal(lines[0], "plain");
+  });
+});
+
+describe("verdict entry (mesh-verdict, agent-colored backgrounds)", () => {
+  const verdictTheme = {
+    fg: (c: string, t: string) => `<fg:${c}>${t}</fg:${c}>`,
+    bg: (c: string, t: string) => `<bg:${c}>${t}</bg:${c}>`,
+    fgAnsi: (c: string) => `\x1b[38;5;${c.length}m`,
+  };
+
+  it("each agent line carries the agent color as text AND background", () => {
+    const lines = renderVerdictEntry(
+      { head: "6/8 answered after 3m12s", answers: [{ to: "agent-3", response: "done" }], missing: [{ to: "agent-7", msgId: "m_xxx" }] },
+      40,
+      verdictTheme as never,
+    );
+    const c3 = agentColor("agent-3");
+    const c7 = agentColor("agent-7");
+    assert.ok(lines[0]!.includes("<bg:customMessageBg>"), "header on the neutral box bg");
+    const a3 = lines.find((l) => l.includes("@agent-3"))!;
+    assert.ok(a3.includes(`<fg:${c3}>`), "agent-3 line in its fg color");
+    assert.ok(a3.includes(`\x1b[48;5;${c3.length}m`), "agent-3 color as BACKGROUND (38→48)");
+    const a7 = lines.find((l) => l.includes("@agent-7"))!;
+    assert.ok(a7.includes(`\x1b[48;5;${c7.length}m`), "agent-7 color as BACKGROUND");
+    assert.ok(a7.includes("NOT ANSWERED"), "missing marker");
+  });
+
+  it("falls back to plain colored lines without a theme", () => {
+    const lines = renderVerdictEntry(
+      { head: "1/1 answered", answers: [{ to: "agent-2", response: "ok" }] },
+      40,
+      theme as never, // no fgAnsi, no bg
+    );
+    assert.ok(lines.some((l) => l.includes("@agent-2")));
+    assert.ok(!lines.some((l) => l.includes("\x1b[48")), "no background without fgAnsi");
   });
 });

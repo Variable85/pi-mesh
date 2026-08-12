@@ -9,7 +9,7 @@ import { MeshGuards } from "./guards.js";
 import { MeshHud } from "./hud.js";
 import { attachClientListeners } from "./attach.js";
 import { injectInbound } from "./inbound.js";
-import { renderLiveEntry, renderMeshInbound } from "./renderer.js";
+import { renderLiveEntry, renderMeshInbound, renderVerdictEntry } from "./renderer.js";
 import type { PersistedIdentity } from "./identity.js";
 import { identityFromClient, MeshIdentity } from "./identity.js";
 import { MeshLedger } from "./ledger.js";
@@ -39,6 +39,23 @@ export default function meshExtension(pi: ExtensionAPI): void {
             fg: (color, text) => theme.fg(color, text),
             bg: (color, text) => theme.bg?.(color, text) ?? text,
             bold: (text) => theme.bold?.(text) ?? text,
+          }),
+        invalidate: () => {},
+      }),
+    );
+  }
+  // mesh-verdict: the colored mesh_wait_all result (display only — the
+  // entry lives OUTSIDE the LLM context; the tool result carries the text).
+  if (typeof pi.registerEntryRenderer === "function") {
+    pi.registerEntryRenderer<{ head?: string; answers?: { to: string; response: string }[]; missing?: { to: string; msgId: string }[] }>(
+      "mesh-verdict",
+      (entry, _options, theme) => ({
+        render: (width: number) =>
+          renderVerdictEntry(entry.data, width, {
+            fg: (color, text) => theme.fg(color, text),
+            bg: (color, text) => theme.bg?.(color, text) ?? text,
+            bold: (text) => theme.bold?.(text) ?? text,
+            fgAnsi: (color) => (theme as unknown as { getFgAnsi(c: string): string }).getFgAnsi(color),
           }),
         invalidate: () => {},
       }),
@@ -118,6 +135,7 @@ export default function meshExtension(pi: ExtensionAPI): void {
       ledgerFailures: 0,
       transcriptFailures: 0,
       injectionFailures: 0,
+      appendEntry: (type, data) => pi.appendEntry(type, data),
     };
     const rt = runtime;
 

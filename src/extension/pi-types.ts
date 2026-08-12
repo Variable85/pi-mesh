@@ -226,6 +226,9 @@ export interface RenderTheme {
   bg?(color: ThemeBg, text: string): string;
   /** Bold helper for the box label. */
   bold?(text: string): string;
+  /** Raw foreground ANSI code for a theme color — used to build the
+   *  per-agent BACKGROUND (38→48) for verdict lines. */
+  fgAnsi?(color: ThemeColor): string;
 }
 
 /** Minimal local surface of pi's MessageRenderer — a factory that

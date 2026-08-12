@@ -13,6 +13,9 @@ export interface RenderTheme {
   bg?(color: ThemeBg, text: string): string;
   /** Bold helper (theme.bold) for the box label. */
   bold?(text: string): string;
+  /** Raw foreground ANSI code for a theme color — the verdict lines use it
+   *  to build the per-agent BACKGROUND (38→48). */
+  fgAnsi?(color: ThemeColor): string;
 }
 
 /** Colorize every @alias in a line with its OWN agent color. */
@@ -133,4 +136,66 @@ export function renderLiveEntry(
 
 function colorizeSender(alias: string, fg: (color: ThemeColor, text: string) => string): string {
   return fg(agentColor(alias), `@${alias}`);
+}
+
+/** Verdict entry payload (mesh-verdict — the colored wait_all result). */
+export interface VerdictEntryData {
+  head?: string;
+  answers?: { to: string; response: string }[];
+  missing?: { to: string; msgId: string }[];
+}
+
+/** ANSI background code for a theme color (38→48 on the raw foreground
+ *  code; works for 256-color and truecolor sequences). */
+export function ansiBackground(color: ThemeColor, theme: RenderTheme): string | undefined {
+  const fg = theme.fgAnsi?.(color);
+  if (fg === undefined || !fg.includes("38")) return undefined;
+  return fg.replace("38", "48");
+}
+
+/** One verdict line: text in the agent's fg color, FULL-WIDTH background in
+ *  the agent's color (padded to `width`). */
+function verdictLine(
+  marker: string,
+  to: string,
+  text: string,
+  width: number,
+  theme: RenderTheme,
+): string {
+  const color = agentColor(to);
+  const body = `${marker} @${to}: ${text}`;
+  const colored = theme.fg(color, body);
+  const bg = ansiBackground(color, theme);
+  if (bg === undefined) return colored;
+  const vis = visibleWidth(colored);
+  const padded = `${bg}${colored}${" ".repeat(Math.max(0, width - vis))}\x1b[49m`;
+  return padded;
+}
+
+/** The wait_all verdict rendered as a colored entry: header in accent on the
+ *  default box background, then one line per agent with the AGENT color as
+ *  text AND background. Falls back to plain lines without a theme. */
+export function renderVerdictEntry(
+  data: VerdictEntryData | undefined,
+  width: number,
+  theme: RenderTheme,
+): string[] {
+  const head = data?.head ?? "wait_all";
+  const out: string[] = [];
+  const pad = (l: string): string => `${l}${" ".repeat(Math.max(0, width - visibleWidth(l)))}`;
+  // header on the neutral box background
+  const bg = theme.bg;
+  if (bg !== undefined) {
+    out.push(bg("customMessageBg", pad(theme.fg("accent", `▚ ${head}`))));
+    out.push(bg("customMessageBg", " ".repeat(Math.max(0, width))));
+  } else {
+    out.push(theme.fg("accent", head));
+  }
+  for (const a of data?.answers ?? []) {
+    out.push(verdictLine("✓", a.to, a.response.replace(/\s+/g, " ").trim().slice(0, 120), width, theme));
+  }
+  for (const m of data?.missing ?? []) {
+    out.push(verdictLine("✗", m.to, `NOT ANSWERED (${m.msgId.slice(0, 18)})`, width, theme));
+  }
+  return out;
 }

@@ -40,6 +40,8 @@ export interface MeshRuntime {
   pendingHistory?: string[];
   /** inbound batching (flush remaining frames on shutdown). */
   batcher?: { flushNow(): void };
+  /** Display-only entry outside the LLM context (mesh-verdict colors). */
+  appendEntry?: (type: string, data: unknown) => void;
   startedAt: number;
   /** inbound-path disk/injection failure counters (see index.ts). */
   ledgerFailures: number;
@@ -597,6 +599,18 @@ async function execMeshWaitAll(
     lines.push(`  ✗ @${m.to}: NOT ANSWERED (${m.msgId.slice(0, 18)})`);
   }
   if (res.total === 0) lines.push("  (no awaited missions — send with awaitReply: true first)");
+  // display the colored verdict entry (agent colors + agent-color backgrounds)
+  if (rt.appendEntry !== undefined) {
+    try {
+      rt.appendEntry("mesh-verdict", {
+        head,
+        answers: res.answers.map((a) => ({ to: a.to, response: a.response })),
+        missing: res.missing.map((m) => ({ to: m.to, msgId: m.msgId })),
+      });
+    } catch {
+      // display only — never breaks the tool result
+    }
+  }
   return textResult(lines.join("\n"), {
     schema: "mesh.wait-all.v1",
     status: res.status,
