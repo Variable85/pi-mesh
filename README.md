@@ -290,6 +290,11 @@ the turn is suspended in the tool call until all `awaitReply` missions are
 answered (or the timeout), then returns who answered (with answers) and who
 is missing. `mesh_status` lists `missions: ✓ answered / ✗ waiting`.
 
+**Boxed rendering (D45)**: mesh messages (simple, batches, live entries)
+are rendered INSIDE the pi custom-message box again — background
+customMessageBg (the purple frame), label `[mesh-inbound]`, padding —
+while keeping the per-agent colors.
+
 **Hardening (D44)**: missions never stay "waiting" forever (failed/expired
 statuses in `mesh_status`), bounded mission/inbox/receipt history, leave
 broadcasts presence(offline), per-agent live-entry cooldown (1.5 s — a

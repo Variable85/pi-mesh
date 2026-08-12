@@ -1,12 +1,18 @@
-// extension/renderer.ts — D41/D43: colored rendering of mesh messages in the
-// conversation. Per-agent colors everywhere: simple messages, batches and
-// live entries. No Pi imports except pi-tui helpers (wrap).
-import { wrapTextWithAnsi } from "@mariozechner/pi-tui";
+// extension/renderer.ts — D41/D43/D45: colored rendering of mesh messages in
+// the conversation, INSIDE the pi custom-message box (background
+// customMessageBg — the "purple frame" of the default rendering, D45).
+// Per-agent colors everywhere: simple messages, batches and live entries.
+// No Pi imports except pi-tui helpers (wrap + visibleWidth).
+import { visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 import { ALIAS_RE, agentColor } from "./colors.js";
-import type { ThemeColor } from "./pi-types.js";
+import type { ThemeBg, ThemeColor } from "./pi-types.js";
 
 export interface RenderTheme {
   fg(color: ThemeColor, text: string): string;
+  /** D45: background application (theme.bg) — absent in tests/headless. */
+  bg?(color: ThemeBg, text: string): string;
+  /** Bold helper (theme.bold) for the box label. */
+  bold?(text: string): string;
 }
 
 /** Colorize every @alias in a line with its OWN agent color. */
@@ -32,6 +38,53 @@ export interface LiveEntryData {
   at?: string;
 }
 
+/**
+ * D45: reproduce pi's default custom-message Box — background
+ * customMessageBg, padding X=1/Y=1 — around OUR colored content, so mesh
+ * messages get the "purple frame" back while keeping per-agent colors.
+ * Falls back to plain lines when the theme has no bg (tests/headless).
+ */
+export function renderBox(
+  contentLines: string[],
+  width: number,
+  theme: RenderTheme,
+  label = "[mesh-inbound]",
+): string[] {
+  const bg = theme.bg;
+  if (bg === undefined) return contentLines;
+  const inner = Math.max(1, width - 2);
+  const out: string[] = [];
+  const emptyLine = bg("customMessageBg", " ".repeat(Math.max(0, width)));
+  out.push(emptyLine); // padding Y=1 top
+  // Label line (like pi's default box): [customType] bold in customMessageLabel
+  const labelText = theme.bold !== undefined ? theme.bold(label) : label;
+  out.push(padBg(bg, theme.fg("customMessageLabel", labelText), width));
+  out.push(emptyLine); // spacer
+  for (const raw of contentLines) {
+    if (raw === "") {
+      out.push(emptyLine);
+      continue;
+    }
+    // wrap to the inner width (padding X=1 on both sides), then pad the rest
+    for (const l of wrapTextWithAnsi(raw, inner)) {
+      out.push(padBg(bg, l, width));
+    }
+  }
+  out.push(emptyLine); // padding Y=1 bottom
+  return out;
+}
+
+/** Left-pad X=1, fill the remaining width with spaces, apply the background. */
+function padBg(
+  bg: (color: ThemeBg, text: string) => string,
+  line: string,
+  width: number,
+): string {
+  const vis = visibleWidth(line);
+  const padded = ` ${line}${" ".repeat(Math.max(0, width - vis - 1))}`;
+  return bg("customMessageBg", padded);
+}
+
 function pushLine(out: string[], line: string, width: number, theme: RenderTheme): void {
   if (line.trim() === "") {
     out.push("");
@@ -42,18 +95,19 @@ function pushLine(out: string[], line: string, width: number, theme: RenderTheme
   out.push(...wrapTextWithAnsi(colorizeAliases(colored, theme), width));
 }
 
+/** Render a mesh message (simple or batch) as a boxed, colored component. */
 export function renderMeshInbound(
   content: string,
   details: MeshInboundDetails | undefined,
   width: number,
   theme: RenderTheme,
 ): string[] {
-  const out: string[] = [];
+  const inner: string[] = [];
   if (details?.kind === "mesh-batch" && typeof details.count === "number") {
-    out.push(theme.fg("accent", `▚ mesh batch — ${details.count} messages`));
+    inner.push(theme.fg("accent", `▚ mesh batch — ${details.count} messages`));
   }
-  for (const raw of content.split("\n")) pushLine(out, raw, width, theme);
-  return out;
+  for (const raw of content.split("\n")) pushLine(inner, raw, width, theme);
+  return renderBox(inner, width, theme);
 }
 
 /** Live inbound entry rendered while the agent is busy (D43). */
@@ -62,17 +116,19 @@ export function renderLiveEntry(
   width: number,
   theme: RenderTheme,
 ): string[] {
-  if (data === undefined || data.from === undefined) return [theme.fg("dim", "[mesh]")];
+  if (data === undefined || data.from === undefined) {
+    return renderBox([theme.fg("dim", "[mesh]")], width, theme);
+  }
   const sender = colorizeSender(data.from, theme.fg);
   const room = data.room !== undefined ? theme.fg("dim", ` [${data.room}]`) : "";
   const time = data.at !== undefined ? theme.fg("dim", ` ${data.at.slice(11, 19)}`) : "";
   const body = (data.body ?? "").replace(/\s+/g, " ").trim();
   const head = `⇠ ${sender}${room}${time}`;
-  const out = [...wrapTextWithAnsi(head, width)];
+  const inner = [...wrapTextWithAnsi(head, width)];
   if (body.length > 0) {
-    out.push(...wrapTextWithAnsi(colorizeAliases(body, theme), width));
+    inner.push(...wrapTextWithAnsi(colorizeAliases(body, theme), width));
   }
-  return out;
+  return renderBox(inner, width, theme, "[mesh-live]");
 }
 
 function colorizeSender(alias: string, fg: (color: ThemeColor, text: string) => string): string {

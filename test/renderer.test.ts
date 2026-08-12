@@ -65,3 +65,39 @@ describe("per-agent colors (D43)", () => {
     assert.ok(lines.some((l) => l.includes("MISSION TERMINÉE")));
   });
 });
+
+describe("boxed rendering (D45)", () => {
+  const boxTheme = {
+    fg: (c: string, t: string) => `<fg:${c}>${t}</fg:${c}>`,
+    bg: (c: string, t: string) => `<bg:${c}>${t}</bg:${c}>`,
+    bold: (t: string) => `<b>${t}</b>`,
+  };
+
+  it("wraps the content in the customMessageBg frame with label and padding", () => {
+    const lines = renderMeshInbound(
+      "[mesh] @agent-2 (room cs-room, normal) hello\n↩ reply with the mesh_reply tool",
+      undefined,
+      40,
+      boxTheme as never,
+    );
+    assert.ok(lines[0]!.includes("<bg:customMessageBg>"), "top padding line has the bg");
+    assert.ok(lines[1]!.includes("<fg:customMessageLabel>"), "label line");
+    assert.ok(lines[1]!.includes("<b>[mesh-inbound]</b>"), "bold label");
+    assert.ok(lines.some((l) => l.includes("<bg:customMessageBg>") && l.includes("<fg:accent>@agent-2</fg:accent>") || l.includes("<bg:customMessageBg>") && l.includes("@agent-2")), "content line carries the bg");
+    const last = lines[lines.length - 1]!;
+    assert.ok(last.includes("<bg:customMessageBg>"), "bottom padding line has the bg");
+  });
+
+  it("content lines are padded to the full width", () => {
+    const lines = renderMeshInbound("x", undefined, 20, boxTheme as never);
+    const content = lines.find((l) => l.includes("x"))!;
+    const visible = content.replace(/<[^>]+>/g, "").length;
+    assert.equal(visible, 20, "each line spans exactly the box width");
+  });
+
+  it("falls back to plain lines when the theme has no bg (headless/tests)", () => {
+    const lines = renderMeshInbound("plain", undefined, 20, theme as never);
+    assert.equal(lines.length, 1);
+    assert.equal(lines[0], "plain");
+  });
+});

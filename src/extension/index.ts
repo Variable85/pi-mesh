@@ -37,6 +37,8 @@ export default function meshExtension(pi: ExtensionAPI): void {
         render: (width: number) =>
           renderLiveEntry(entry.data, width, {
             fg: (color, text) => theme.fg(color, text),
+            bg: (color, text) => theme.bg?.(color, text) ?? text,
+            bold: (text) => theme.bold?.(text) ?? text,
           }),
         invalidate: () => {},
       }),
@@ -53,6 +55,8 @@ export default function meshExtension(pi: ExtensionAPI): void {
           render: (width: number) =>
             renderMeshInbound(content, details, width, {
               fg: (color, text) => theme.fg(color, text),
+              bg: (color, text) => theme.bg?.(color, text) ?? text,
+              bold: (text) => theme.bold?.(text) ?? text,
             }),
           invalidate: () => {},
         };

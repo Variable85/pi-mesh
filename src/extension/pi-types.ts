@@ -209,8 +209,22 @@ export interface EntryRenderer<T = unknown> {
 }
 
 /** Local theme surface for renderers (D41). */
+/** Background theme colors (theme.bg surface, D45 box rendering). */
+export type ThemeBg =
+  | "selectedBg"
+  | "scrollbarThumb"
+  | "userMessageBg"
+  | "customMessageBg"
+  | "toolPendingBg"
+  | "toolSuccessBg"
+  | "toolErrorBg";
+
 export interface RenderTheme {
   fg(color: ThemeColor, text: string): string;
+  /** D45: background application — absent in headless/test themes. */
+  bg?(color: ThemeBg, text: string): string;
+  /** Bold helper for the box label. */
+  bold?(text: string): string;
 }
 
 /** Minimal local surface of pi's MessageRenderer (D41) — a factory that
