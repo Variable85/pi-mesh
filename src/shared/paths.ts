@@ -82,11 +82,3 @@ export function ledgerPath(dir?: string, env: NodeJS.ProcessEnv = process.env): 
   return path.join(dir ?? stateDir(env), LEDGER_FILE_NAME);
 }
 
-const SAFE_STEM_REGEX = /[^a-zA-Z0-9._-]/g;
-const SAFE_STEM_FALLBACK = "x";
-
-/** Filesystem-safe stem for per-alias files (ledger, transcripts). */
-export function safeFileStem(alias: string): string {
-  const cleaned = alias.trim().replace(SAFE_STEM_REGEX, SAFE_STEM_FALLBACK);
-  return cleaned.length > 0 ? cleaned : SAFE_STEM_FALLBACK;
-}

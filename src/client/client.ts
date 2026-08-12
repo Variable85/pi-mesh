@@ -38,6 +38,7 @@ import {
   type MeshConfig,
 } from "../shared/config.js";
 import { runtimeDir } from "../shared/paths.js";
+import { MESH_VERSION } from "../shared/version.js";
 import { PendingReplies } from "./pending.js";
 import { backoffMs, ensureBroker } from "./reconnect.js";
 
@@ -51,6 +52,8 @@ export interface WelcomeInfo {
 export interface StatusSnapshot {
   peers: MeshPeerInfo[];
   rooms: string[];
+  /** M2: broker counters (status_res) — relayed/refused/mailbox. */
+  stats?: { relayed: number; refused: number; mailboxDelivered: number; mailboxDropped: number };
 }
 
 export interface SendOpts {
@@ -622,6 +625,7 @@ export class MeshClient extends EventEmitter {
           rooms: [...this.joinedRooms],
           reservations: this.ownReservations.length > 0 ? [...this.ownReservations] : undefined,
           token: this.config.brokerToken !== undefined ? sha256(this.config.brokerToken) : undefined,
+          clientVersion: MESH_VERSION, // M1: peers see each other's version
         });
         socket.write(encodeFrame(hello, this.config.maxFrameBytes));
       });
@@ -1184,7 +1188,11 @@ export class MeshClient extends EventEmitter {
       this.statusWaiters.set(frame.id, {
         timer,
         resolve: (res) =>
-          resolve({ peers: res.peers ?? [], rooms: res.rooms ?? [] }),
+          resolve({
+            peers: res.peers ?? [],
+            rooms: res.rooms ?? [],
+            stats: res.stats,
+          }),
       });
       this.writeOrQueue(frame);
     });

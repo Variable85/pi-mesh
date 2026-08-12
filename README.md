@@ -290,6 +290,12 @@ the turn is suspended in the tool call until all `awaitReply` missions are
 answered (or the timeout), then returns who answered (with answers) and who
 is missing. `mesh_status` lists `missions: ✓ answered / ✗ waiting`.
 
+**Observability (M1/M2)**: the hello carries the extension version —
+`mesh_status` and `mesh peers` show every peer's version with a ⚠ when it
+differs from the broker's (stale sessions at a glance). `mesh_status`
+also shows the broker counters (relayed/refused/mailbox). Inbound
+messages now carry the local arrival time in their prefix (HH:MM:SS).
+
 **Boxed rendering (D45)**: mesh messages (simple, batches, live entries)
 are rendered INSIDE the pi custom-message box again — background
 customMessageBg (the purple frame), label `[mesh-inbound]`, padding —

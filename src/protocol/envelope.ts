@@ -28,6 +28,8 @@ export interface MeshPeerInfo {
   /** D32: last broker-seen activity (heartbeat/tool frames) — status calc. */
   lastSeenAt?: string;
   reservations?: FileReservation[];
+  /** M1: extension version (from the hello frame). */
+  clientVersion?: string;
 }
 
 
@@ -63,6 +65,11 @@ export interface MeshFrame {
   reads?: string;
   /** D37: shared auth token hash (hello only) — required on tcp/tls brokers. */
   token?: string;
+  /** M1: extension version of the sender (hello) — shown in status snapshots
+   *  so stale sessions are visible at a glance. */
+  clientVersion?: string;
+  /** M2: broker counters (status_res). */
+  stats?: { relayed: number; refused: number; mailboxDelivered: number; mailboxDropped: number };
   ts: string;
 }
 
@@ -219,6 +226,10 @@ export interface BuildFrameOpts {
   totalCount?: number;
   reads?: string;
   token?: string;
+  /** M1: extension version (hello). */
+  clientVersion?: string;
+  /** M2: broker counters (status_res). */
+  stats?: { relayed: number; refused: number; mailboxDelivered: number; mailboxDropped: number };
 }
 
 /** Build a protocol-valid frame; bodyHash auto-computed when body present. */
@@ -256,6 +267,8 @@ export function buildFrame(opts: BuildFrameOpts): MeshFrame {
   if (opts.totalCount !== undefined) frame.totalCount = opts.totalCount;
   if (opts.reads !== undefined) frame.reads = opts.reads;
   if (opts.token !== undefined) frame.token = opts.token;
+  if (opts.clientVersion !== undefined) frame.clientVersion = opts.clientVersion;
+  if (opts.stats !== undefined) frame.stats = { ...opts.stats };
   return frame;
 }
 
@@ -387,6 +400,13 @@ export function validateFrame(value: unknown, opts: ValidateOpts = {}): Validati
     }
     if (typeof value.token !== "string" || value.token.length === 0 || value.token.length > 128) {
       return { ok: false, code: "invalid_frame", detail: "bad token" };
+    }
+  }
+
+  // M1: clientVersion — bounded string (hello carries it)
+  if (value.clientVersion !== undefined) {
+    if (typeof value.clientVersion !== "string" || value.clientVersion.length === 0 || value.clientVersion.length > 64) {
+      return { ok: false, code: "invalid_frame", detail: "bad clientVersion" };
     }
   }
 

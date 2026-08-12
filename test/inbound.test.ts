@@ -3,7 +3,7 @@
 // carrying the exact msgId so the receiving model knows HOW to answer.
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { formatInboundContent } from "../src/extension/inbound.js";
+import { formatInboundContent, localTime } from "../src/extension/inbound.js";
 import { buildFrame, type MeshFrame } from "../src/protocol/envelope.js";
 
 const msgFrame = (): MeshFrame =>
@@ -13,7 +13,7 @@ describe("formatInboundContent: first line stays byte-identical (§9.1)", () => 
   it("msg frame first line is exactly `[mesh] @from (room X, priority) body`", () => {
     const f = msgFrame();
     const firstLine = formatInboundContent(f).split("\n")[0];
-    assert.equal(firstLine, "[mesh] @alice (room default, normal) hello");
+    assert.equal(firstLine, `[mesh] @alice (room default, normal, ${localTime(f.ts)}) hello`);
   });
 
   it("mailbox frame keeps the same first-line format", () => {
@@ -26,7 +26,7 @@ describe("formatInboundContent: first line stays byte-identical (§9.1)", () => 
       body: "queued",
     });
     const firstLine = formatInboundContent(f).split("\n")[0];
-    assert.equal(firstLine, "[mesh] @alice (room ops, urgent) queued");
+    assert.equal(firstLine, `[mesh] @alice (room ops, urgent, ${localTime(f.ts)}) queued`);
   });
 });
 
@@ -61,7 +61,7 @@ describe("formatInboundContent: remind frames carry the replyTo instruction", ()
     const content = formatInboundContent(f);
     assert.equal(
       content,
-      '[mesh] @broker (room default, normal) reminder: reply due for msg-123' +
+      `[mesh] @broker (room default, normal, ${localTime(f.ts)}) reminder: reply due for msg-123` +
         ' — reply with the mesh_reply tool using msgId "msg-123" ' +
         '(IGNORE this reminder if you ALREADY replied to this msgId)',
     );
@@ -92,7 +92,7 @@ describe("formatInboundContent: orphan replies (the cs-room fix)", () => {
     });
     const content = formatInboundContent(f);
     assert.ok(
-      content.startsWith("[mesh] @bob (room cs-room, normal) reply to m_orig_12345678: MISSION COMPLETE"),
+      content.startsWith(`[mesh] @bob (room cs-room, normal, ${localTime(f.ts)}) reply to m_orig_12345678: MISSION COMPLETE`),
       `got: ${content}`,
     );
     assert.ok(

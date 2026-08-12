@@ -194,6 +194,11 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
       lastSeenAt: Date.now(),
       helloDone: true,
       reservations: frame.reservations ?? [],
+      // M1: the sender's extension version (hello) — shown in snapshots
+      clientVersion:
+        typeof frame.clientVersion === "string" && frame.clientVersion.length > 0
+          ? frame.clientVersion.slice(0, 64)
+          : undefined,
     };
     state.peers.set(alias, peer);
     state.knownAliases.set(alias, Date.now()); // B8: (re)stamp on every hello
@@ -463,6 +468,7 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
         sendTo(peer, buildFrame({ type: "pong", id: frame.id }));
         break;
       case "status_req": {
+        const s = state.stats;
         sendTo(
           peer,
           buildFrame({
@@ -470,6 +476,8 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
             id: frame.id,
             peers: peersSnapshot(state, frame.room),
             rooms: [...state.rooms.keys()],
+            // M2: broker counters ride along — relayed/refused/mailbox
+            stats: { relayed: s.relayed, refused: s.refused, mailboxDelivered: s.mailboxDelivered, mailboxDropped: s.mailboxDropped },
           }),
         );
         break;

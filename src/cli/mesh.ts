@@ -120,8 +120,14 @@ async function cmdPeers(args: string[]): Promise<number> {
     return 1;
   }
   const snap = await client.status(room);
+  // M1/M2: per-peer extension version + broker counters in the CLI too
   for (const p of snap.peers) {
-    process.stdout.write(`${p.alias}\trooms=${p.rooms.join(",")}\tsince=${p.since ?? "?"}\n`);
+    const v = p.clientVersion !== undefined && p.clientVersion !== "" ? `v${p.clientVersion}` : "v?";
+    process.stdout.write(`${p.alias}\trooms=${p.rooms.join(",")}\tv=${v}\tsince=${p.since ?? "?"}\n`);
+  }
+  if (snap.stats !== undefined) {
+    const s = snap.stats;
+    process.stdout.write(`broker: relayed=${s.relayed} refused=${s.refused} mailboxDelivered=${s.mailboxDelivered} mailboxDropped=${s.mailboxDropped}\n`);
   }
   await client.close();
   return 0;

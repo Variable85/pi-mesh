@@ -16,12 +16,15 @@ export interface InjectedInbound {
   aborted: boolean;
 }
 
-/** §9.1 content format: `[mesh] @from (room X, priority) body`. */
+/** §9.1 content format: `[mesh] @from (room X, priority, HH:MM:SS) body` —
+ *  M4: the local arrival time is part of the prefix so bursts are
+ *  chronological at a glance. */
 export function formatInboundContent(frame: MeshFrame, opts: { replyChain?: boolean } = {}): string {
   const room = frame.room ?? "default";
   const priority = frame.priority ?? "normal";
   const fan = frame.broadcast === true ? ", broadcast" : frame.replyAll === true ? ", reply-all" : "";
-  const prefix = `[mesh] @${frame.from ?? "?"} (room ${room}, ${priority}${fan})`;
+  const time = localTime(frame.ts);
+  const prefix = `[mesh] @${frame.from ?? "?"} (room ${room}, ${priority}${fan}, ${time})`;
   if (frame.type === "remind") {
     const replyTo = frame.replyTo ?? frame.id;
     return (
@@ -55,6 +58,13 @@ export function formatInboundContent(frame: MeshFrame, opts: { replyChain?: bool
       ? ` (broadcast to ${frame.totalCount ?? "?"} members — use replyAll to answer the room, or reply to just @${frame.from ?? "?"})`
       : "")
   );
+}
+
+/** M4: local HH:MM:SS from an ISO timestamp (best effort). */
+export function localTime(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "??:??:??";
+  return new Date(t).toTimeString().slice(0, 8);
 }
 
 export function inboundDetails(frame: MeshFrame): Record<string, unknown> {

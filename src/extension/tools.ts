@@ -14,6 +14,7 @@ import {
   MIN_AWAIT_REPLY_TIMEOUT_MS,
   TRANSCRIPT_RING_SIZE,
 } from "../shared/config.js";
+import { MESH_VERSION } from "../shared/version.js";
 import type { MeshGuards } from "./guards.js";
 import { LOOP_GUARD_WARNING, REPLY_REPEAT_WARNING } from "./guards.js";
 import { identityFromClient, type MeshIdentity } from "./identity.js";
@@ -387,16 +388,25 @@ async function execMeshStatus(
     (p) => p.alias === rt.client.alias || mine.size === 0 || p.rooms.some((r) => mine.has(r)),
   );
   const peers = params.all === true ? snap.peers : visible;
+  const localVersion = MESH_VERSION;
   const lines = [
     `mesh status — alias @${rt.client.alias}${room !== undefined ? ` room=${room}` : ""} (my rooms: ${rt.client.rooms.join(",") || "none"})`,
     `peers (${peers.length}):`,
     ...peers.map((p) => {
       const act = computePeerStatus(p.lastSeenAt, (p.reservations?.length ?? 0) > 0, rt.client.activityIdleMs, rt.client.activityStuckMs);
       const actTag = act.status === "active" ? "" : act.status === "stuck" ? ` ✕stuck ${act.idleFor}` : ` ○idle ${act.idleFor}`;
-      return `  @${p.alias} rooms=${p.rooms.join(",")}${p.since !== undefined ? ` since=${p.since}` : ""}${actTag}`;
+      // M1: per-peer extension version; ⚠ when it differs from ours
+      const v = p.clientVersion !== undefined && p.clientVersion !== "" ? ` v${p.clientVersion}` : " v?";
+      const skew = p.clientVersion !== undefined && p.clientVersion !== localVersion ? " ⚠" : "";
+      return `  @${p.alias} rooms=${p.rooms.join(",")}${v}${skew}${p.since !== undefined ? ` since=${p.since}` : ""}${actTag}`;
     }),
     `mesh rooms: ${snap.rooms.length > 0 ? snap.rooms.join(", ") : "(none)"}`,
   ];
+  // M2: broker counters — relayed/refused/mailbox at a glance
+  if (snap.stats !== undefined) {
+    const s = snap.stats;
+    lines.push(`broker: relayed=${s.relayed} refused=${s.refused} mailboxDelivered=${s.mailboxDelivered} mailboxDropped=${s.mailboxDropped}`);
+  }
   const receipts = rt.client.readReceipts(3);
   if (receipts.length > 0) {
     lines.push(

@@ -7,7 +7,7 @@ import { describe, it } from "node:test";
 import { closePeer, pruneStaleKnownAliases, type RunningBroker } from "../src/broker/broker.js";
 import { joinRoom } from "../src/broker/rooms.js";
 import { BrokerState, type PeerRecord } from "../src/broker/state.js";
-import { buildFrame } from "../src/protocol/envelope.js";
+import { buildFrame, parseFrameLine } from "../src/protocol/envelope.js";
 import { sha256 } from "../src/protocol/frames.js";
 import {
   brokerSocketPathOf,
@@ -446,5 +446,31 @@ describe("stale known aliases pruned (B8)", () => {
     broker.state.knownAliases.set("b8-a", Date.now() - 5000);
     pruneStaleKnownAliases(broker.state, Date.now(), 1000);
     assert.ok(!broker.state.knownAliases.has("b8-a"), "stale alias dropped");
+  });
+});
+
+describe("version + stats visibility (M1/M2)", () => {
+  it("hello clientVersion is propagated into the status snapshot", async (t) => {
+    const { sock } = await withBroker(t);
+    const alice = trackRaw(t, await RawClient.connect(sock));
+    alice.send({ type: "hello", from: "v-a", clientVersion: "9.9.9-test" });
+    await alice.waitFrame((f) => f.type === "welcome");
+    const bob = trackRaw(t, await RawClient.connect(sock));
+    bob.hello("v-b");
+    await bob.waitFrame((f) => f.type === "welcome");
+    bob.send({ type: "status_req", from: "v-b" });
+    const res = await bob.waitFrame((f) => f.type === "status_res");
+    const aliceInfo = res.peers!.find((p) => p.alias === "v-a");
+    assert.equal(aliceInfo?.clientVersion, "9.9.9-test");
+    // broker counters ride along
+    assert.ok(res.stats !== undefined);
+    assert.equal(typeof res.stats.relayed, "number");
+    assert.equal(typeof res.stats.refused, "number");
+  });
+
+  it("clientVersion is validated (bounded string)", () => {
+    const bad = buildFrame({ type: "hello", from: "v-bad", clientVersion: "x".repeat(65) });
+    const parsed = parseFrameLine(JSON.stringify(bad));
+    assert.equal(parsed.ok, false);
   });
 });
