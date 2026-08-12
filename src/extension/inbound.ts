@@ -197,6 +197,18 @@ export interface InboundDeps {
   isReplyToReply?: (replyTo: string) => boolean;
 }
 
+/**
+ * Side effects that ALWAYS run per frame (never batched): transcript,
+ * ledger, read receipt, replyChain tagging. D40.
+ */
+export function handleInboundSideEffects(frame: MeshFrame, deps: InboundDeps): void {
+  const replyChain =
+    frame.type === "reply" &&
+    frame.replyTo !== undefined &&
+    deps.isReplyToReply?.(frame.replyTo) === true;
+  (frame as unknown as { __replyChain?: boolean }).__replyChain = replyChain;
+}
+
 export function handleInboundFrame(
   pi: Pick<ExtensionAPI, "sendMessage">,
   ctx: SessionContext | null,
@@ -204,11 +216,10 @@ export function handleInboundFrame(
   deps: InboundDeps,
 ): void {
   try {
-    const replyChain =
-      frame.type === "reply" &&
-      frame.replyTo !== undefined &&
-      deps.isReplyToReply?.(frame.replyTo) === true;
-    injectInbound(pi, ctx, frame, { replyChain });
+    handleInboundSideEffects(frame, deps);
+    injectInbound(pi, ctx, frame, {
+      replyChain: (frame as unknown as { __replyChain?: boolean }).__replyChain === true,
+    });
   } catch {
     deps.counters.injectionFailures += 1; // one bad frame must not kill the loop (I10)
   }

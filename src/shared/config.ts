@@ -58,6 +58,9 @@ export const ENSURE_BROKER_POLL_MS = 50;
 export const ENSURE_BROKER_MAX_POLLS = 60; // 3 s
 export const LOCK_RETRY_MAX = 3;
 
+// ---- Inbound batching (D40) ----
+export const DEFAULT_INBOUND_BATCH_MS = 250;
+
 // ---- Activity status (D32) ----
 export const DEFAULT_ACTIVITY_IDLE_MS = 120_000; // 2 min without heartbeat/tools
 export const DEFAULT_ACTIVITY_STUCK_MS = 900_000; // 15 min idle WITH reservations
@@ -126,6 +129,10 @@ export interface MeshConfig {
   tlsCa?: string;
   /** D37: accept self-signed certs (INSECURE — LAN/dev only). */
   tlsInsecure?: boolean;
+  /** D40: group inbound messages and inject them as ONE batched message
+   *  (ms). 0 disables batching. Bursts after a long tool call become a
+   *  single turn instead of one turn per message. */
+  inboundBatchMs?: number;
 }
 
 export const DEFAULT_CONFIG: MeshConfig = {
@@ -142,6 +149,7 @@ export const DEFAULT_CONFIG: MeshConfig = {
   activityIdleMs: DEFAULT_ACTIVITY_IDLE_MS,
   activityStuckMs: DEFAULT_ACTIVITY_STUCK_MS,
   reservationTtlMs: DEFAULT_RESERVATION_TTL_MS,
+  inboundBatchMs: DEFAULT_INBOUND_BATCH_MS,
 };
 
 function clampFrameBytes(n: number): number {
@@ -199,6 +207,9 @@ export function loadConfig(stateDir?: string, env: NodeJS.ProcessEnv = process.e
     activityIdleMs: positiveInt(fileCfg.activityIdleMs, DEFAULT_CONFIG.activityIdleMs),
     activityStuckMs: positiveInt(fileCfg.activityStuckMs, DEFAULT_CONFIG.activityStuckMs),
     reservationTtlMs: positiveInt(fileCfg.reservationTtlMs, DEFAULT_CONFIG.reservationTtlMs),
+    inboundBatchMs: fileCfg.inboundBatchMs === 0
+      ? 0
+      : positiveInt(fileCfg.inboundBatchMs ?? DEFAULT_INBOUND_BATCH_MS, DEFAULT_INBOUND_BATCH_MS),
   };
   if (typeof fileCfg.alias === "string" && fileCfg.alias.trim() !== "") cfg.alias = fileCfg.alias;
   if (typeof fileCfg.listen === "string" && parseEndpoint(fileCfg.listen) !== null) cfg.listen = fileCfg.listen;
@@ -244,6 +255,10 @@ export function loadConfig(stateDir?: string, env: NodeJS.ProcessEnv = process.e
   if (envStuck !== undefined) cfg.activityStuckMs = envStuck;
   const envResTtl = envInt(env, "MESH_RESERVATION_TTL_MS");
   if (envResTtl !== undefined) cfg.reservationTtlMs = envResTtl;
+  if (env.MESH_INBOUND_BATCH_MS !== undefined) {
+    const n = Number(env.MESH_INBOUND_BATCH_MS);
+    cfg.inboundBatchMs = Number.isFinite(n) && n >= 0 ? Math.floor(n) : cfg.inboundBatchMs;
+  }
   const envTranscript = env.MESH_TRANSCRIPT;
   if (envTranscript !== undefined) cfg.transcript = envTranscript === "1" || envTranscript === "true";
 

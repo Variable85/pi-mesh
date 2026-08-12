@@ -4,9 +4,10 @@
 import { readFileSync } from "node:fs";
 import type { WelcomeInfo } from "../client/client.js";
 import type { MeshFrame } from "../protocol/envelope.js";
+import { InboundBatcher, batchDetails, buildBatchMessage, buildSingleMessage, bypassesBatch } from "./batcher.js";
 import type { MeshHud } from "./hud.js";
-import { handleInboundFrame } from "./inbound.js";
-import type { ExtensionAPI, SessionContext } from "./pi-types.js";
+import { handleInboundSideEffects, injectInbound } from "./inbound.js";
+import type { ExtensionAPI, InboundMessage, SessionContext } from "./pi-types.js";
 import type { MeshRuntime } from "./tools.js";
 
 /** D31: session name keeps the first user message after the mesh identity. */
@@ -82,18 +83,42 @@ export function attachClientListeners(
   client: import("../client/client.js").MeshClient,
   saveIdentity: (rt: MeshRuntime) => void,
 ): void {
+  const deps = {
+    ledger: rt.ledger,
+    transcript: rt.transcript,
+    selfAlias: client.alias,
+    counters: rt,
+    read: (msgId: string, from: string) => client.sendRead(msgId, from),
+    isReplyToReply: (replyTo: string) => client.isReplyToReply(replyTo),
+  };
+  // D40: batch inbound messages over a short window → ONE injection (one
+  // turn) for a burst; force/remind bypass the batcher (immediate delivery).
+  const batcher = new InboundBatcher(client.inboundBatchMs, (frames) => {
+    const batch = buildBatchMessage(frames);
+    pi.sendMessage(
+      {
+        customType: "mesh-inbound",
+        content: batch.content,
+        display: true,
+        details: batchDetails(frames),
+      },
+      { triggerTurn: true, deliverAs: batch.deliverAs },
+    );
+  });
   client.on("inbound", (frame: MeshFrame) => {
     if (rt === null) return; // session shutting down
-    handleInboundFrame(pi, rt.ctx, frame, {
-      ledger: rt.ledger,
-      transcript: rt.transcript,
-      selfAlias: client.alias,
-      counters: rt,
-      read: (msgId, from) => client.sendRead(msgId, from),
-      isReplyToReply: (replyTo) => client.isReplyToReply(replyTo),
-    });
+    handleInboundSideEffects(frame, deps);
     getHud()?.noteInbound(frame); // L2 preview: transient memory only, never persisted
+    if (bypassesBatch(frame) || client.inboundBatchMs <= 0) {
+      batcher.flushNow(); // deliver any pending batch first (ordering)
+      injectInbound(pi, rt.ctx, frame, {
+        replyChain: (frame as unknown as { __replyChain?: boolean }).__replyChain === true,
+      });
+      return;
+    }
+    batcher.push(frame);
   });
+  rt.batcher = batcher;
 
   // presence → appendEntry ONLY, no turn (§9.1)
   client.on("presence", (frame: MeshFrame) => {

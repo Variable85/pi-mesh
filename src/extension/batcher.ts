@@ -1,0 +1,120 @@
+// extension/batcher.ts — D40: group inbound messages arriving in a burst and
+// inject them as ONE batched message. After a long tool call (sleep, load),
+// N replies queue up; injecting them one-by-one forces N turns and N LLM
+// calls. A batch is one turn: the agent sees the whole lot and answers once.
+import type { MeshFrame, MeshPriority } from "../protocol/envelope.js";
+import { formatInboundContent, inboundDetails } from "./inbound.js";
+import type { DeliverAs, InboundMessage } from "./pi-types.js";
+
+export interface BatchedInjection {
+  content: string;
+  deliverAs: DeliverAs;
+}
+
+/** Bounds for the batched content (I8: named constants). */
+export const BATCH_MAX_MESSAGES = 12;
+export const BATCH_MAX_BODY_CHARS = 240;
+
+function priorityRank(p: MeshPriority): number {
+  return p === "force" ? 3 : p === "urgent" ? 2 : 1;
+}
+
+/**
+ * D40: one message per frame (formatted), batched content = numbered list.
+ * The delivery mode is the most interrupting one in the lot (steer wins over
+ * followUp); force frames NEVER go through the batcher (they have their own
+ * abort path).
+ */
+export function buildBatchMessage(frames: MeshFrame[]): BatchedInjection {
+  const shown = frames.slice(0, BATCH_MAX_MESSAGES);
+  const overflow = frames.length - shown.length;
+  const parts: string[] = [`[mesh batch — ${frames.length} message${frames.length > 1 ? "s" : ""}]`];
+  shown.forEach((f, i) => {
+    const body = formatInboundContent(f, {
+      replyChain: (f as unknown as { __replyChain?: boolean }).__replyChain === true,
+    });
+    parts.push(`${i + 1}) ${body}`);
+  });
+  if (overflow > 0) parts.push(`… (+${overflow} more — see mesh_history)`);
+  parts.push(
+    "",
+    "Treat each message independently. Urgent items first. Do NOT acknowledge them one by one.",
+  );
+  const hasUrgent = frames.some((f) => f.priority === "urgent");
+  const hasReply = frames.some((f) => f.type === "reply");
+  const deliverAs: DeliverAs = hasUrgent || hasReply ? "steer" : "followUp";
+  return { content: parts.join("\n"), deliverAs };
+}
+
+export function batchDetails(frames: MeshFrame[]): Record<string, unknown> {
+  return {
+    kind: "mesh-batch",
+    count: frames.length,
+    messages: frames.map((f) => inboundDetails(f)),
+  };
+}
+
+/** Returns true when the frame must be injected IMMEDIATELY (never batched). */
+export function bypassesBatch(frame: MeshFrame): boolean {
+  return frame.priority === "force" || frame.type === "remind";
+}
+
+/** Build a single (non-batched) inbound message — used when batchMs = 0. */
+export function buildSingleMessage(frame: MeshFrame): InboundMessage {
+  return {
+    customType: "mesh-inbound",
+    content: formatInboundContent(frame, {
+      replyChain: (frame as unknown as { __replyChain?: boolean }).__replyChain === true,
+    }),
+    display: true,
+    details: inboundDetails(frame),
+  };
+}
+
+export { priorityRank };
+
+/**
+ * D40: accumulates inbound frames over a short window, then injects them as
+ * one batched message (single turn). Frames that must not wait (force,
+ * remind) bypass the batcher entirely.
+ */
+export class InboundBatcher {
+  private frames: MeshFrame[] = [];
+  private timer: NodeJS.Timeout | null = null;
+
+  constructor(
+    private readonly windowMs: number,
+    private readonly onFlush: (frames: MeshFrame[]) => void,
+  ) {}
+
+  push(frame: MeshFrame): void {
+    this.frames.push(frame);
+    if (this.timer === null && this.windowMs > 0) {
+      this.timer = setTimeout(() => this.flush(), this.windowMs);
+      this.timer.unref();
+    }
+  }
+
+  flushNow(): void {
+    if (this.timer !== null) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.flush();
+  }
+
+  get pending(): number {
+    return this.frames.length;
+  }
+
+  private flush(): void {
+    if (this.timer !== null) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    if (this.frames.length === 0) return;
+    const batch = this.frames;
+    this.frames = [];
+    this.onFlush(batch);
+  }
+}

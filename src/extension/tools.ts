@@ -37,6 +37,8 @@ export interface MeshRuntime {
   identity: MeshIdentity;
   /** D30: transferred history from a /mesh new handoff (injected at ready). */
   pendingHistory?: string[];
+  /** D40: inbound batching (flush remaining frames on shutdown). */
+  batcher?: { flushNow(): void };
   startedAt: number;
   /** B1: inbound-path disk/injection failure counters (see index.ts). */
   ledgerFailures: number;

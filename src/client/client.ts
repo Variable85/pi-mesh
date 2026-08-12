@@ -281,6 +281,11 @@ export class MeshClient extends EventEmitter {
     return this.config.reservationTtlMs;
   }
 
+  /** D40: inbound batching window (0 = disabled). */
+  get inboundBatchMs(): number {
+    return this.config.inboundBatchMs ?? 0;
+  }
+
   isOnline(): boolean {
     return this.online;
   }
