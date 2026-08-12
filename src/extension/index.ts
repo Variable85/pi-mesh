@@ -9,7 +9,7 @@ import { MeshGuards } from "./guards.js";
 import { MeshHud } from "./hud.js";
 import { attachClientListeners } from "./attach.js";
 import { injectInbound } from "./inbound.js";
-import { renderMeshInbound } from "./renderer.js";
+import { renderLiveEntry, renderMeshInbound } from "./renderer.js";
 import type { PersistedIdentity } from "./identity.js";
 import { identityFromClient, MeshIdentity } from "./identity.js";
 import { MeshLedger } from "./ledger.js";
@@ -28,6 +28,20 @@ export default function meshExtension(pi: ExtensionAPI): void {
   // Tools + command are registered IMMEDIATELY (they answer `blocked` offline).
   registerTools(pi, getRuntime);
   registerCommands(pi, getRuntime, () => hud?.onLocalChange(), () => hud);
+  // D43: live inbound entries rendered while a tool call runs (outside the
+  // LLM context — zero tokens), so bursts are visible in real time.
+  if (typeof pi.registerEntryRenderer === "function") {
+    pi.registerEntryRenderer<{ from?: string; room?: string; body?: string; at?: string }>(
+      "mesh-live",
+      (entry, _options, theme) => ({
+        render: (width: number) =>
+          renderLiveEntry(entry.data, width, {
+            fg: (color, text) => theme.fg(color, text),
+          }),
+        invalidate: () => {},
+      }),
+    );
+  }
   // D41: colored rendering of mesh messages (simple + batches).
   if (typeof pi.registerMessageRenderer === "function") {
     pi.registerMessageRenderer<{ kind?: string; count?: number }>(

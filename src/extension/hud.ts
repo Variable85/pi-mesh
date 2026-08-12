@@ -4,6 +4,7 @@
 // Body previews are transient memory only — never persisted (I1).
 
 import { computePeerStatus, type StatusSnapshot } from "../client/client.js";
+import { agentColor } from "./colors.js";
 import type { MeshFrame } from "../protocol/envelope.js";
 import type { SessionContext } from "./pi-types.js";
 import type { GetRuntime } from "./tools.js";
@@ -228,14 +229,21 @@ export class MeshHud {
     ctx.ui.setStatus(HUD_STATUS_ID, hudStatusText(state));
   }
 
-  /** Eager colorization at refresh time; plain lines when no theme (headless). */
+  /** Eager colorization at refresh time; plain lines when no theme (headless).
+   *  D43: known peer aliases are recolored with their per-agent color. */
   private colorize(lines: [string, ...string[]], state: HudState): string[] {
     const theme = this.ctx?.ui.theme;
     if (theme === undefined) return lines;
     const color = state.connected ? "success" : state.connecting ? "warning" : "muted";
-    return lines.map((line, i) =>
-      i === 0 ? theme.fg(color, line) : theme.fg("muted", line),
-    );
+    const peers = this.snapshot?.peers ?? [];
+    return lines.map((line, i) => {
+      let l = line;
+      for (const p of peers) {
+        const c = agentColor(p.alias);
+        l = l.split(p.alias).join(theme.fg(c, p.alias));
+      }
+      return i === 0 ? theme.fg(color, l) : theme.fg("muted", l);
+    });
   }
 
   private buildState(): HudState {

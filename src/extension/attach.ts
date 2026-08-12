@@ -121,6 +121,18 @@ export function attachClientListeners(
       });
       return;
     }
+    // D43: while the agent is busy (sleep/long tool), the frame is HELD for
+    // the batch — show it LIVE in the conversation right now (entry outside
+    // the LLM context) so the burst is visible in real time.
+    if (rt.ctx?.isIdle?.() === false) {
+      pi.appendEntry("mesh-live", {
+        from: frame.from,
+        room: frame.room,
+        priority: frame.priority,
+        body: frame.body,
+        at: frame.ts,
+      });
+    }
     batcher.push(frame);
   });
   rt.batcher = batcher;

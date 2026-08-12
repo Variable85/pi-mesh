@@ -15,8 +15,55 @@ export interface ToolResult {
   details?: Record<string, unknown>;
 }
 
-/** Theme colors supported by the Pi TUI theme.fg (minimal local surface). */
-export type ThemeColor = "success" | "warning" | "error" | "muted" | "accent";
+/** Theme colors supported by the Pi TUI theme.fg (D43: full surface used
+ *  by the per-agent palette). */
+export type ThemeColor =
+  | "accent"
+  | "border"
+  | "borderAccent"
+  | "borderMuted"
+  | "success"
+  | "error"
+  | "warning"
+  | "muted"
+  | "dim"
+  | "text"
+  | "thinkingText"
+  | "userMessageText"
+  | "customMessageText"
+  | "customMessageLabel"
+  | "toolTitle"
+  | "toolOutput"
+  | "mdHeading"
+  | "mdLink"
+  | "mdLinkUrl"
+  | "mdCode"
+  | "mdCodeBlock"
+  | "mdCodeBlockBorder"
+  | "mdQuote"
+  | "mdQuoteBorder"
+  | "mdHr"
+  | "mdListBullet"
+  | "toolDiffAdded"
+  | "toolDiffRemoved"
+  | "toolDiffContext"
+  | "syntaxComment"
+  | "syntaxKeyword"
+  | "syntaxFunction"
+  | "syntaxVariable"
+  | "syntaxString"
+  | "syntaxNumber"
+  | "syntaxType"
+  | "syntaxOperator"
+  | "syntaxPunctuation"
+  | "thinkingOff"
+  | "thinkingMinimal"
+  | "thinkingLow"
+  | "thinkingMedium"
+  | "thinkingHigh"
+  | "thinkingXhigh"
+  | "thinkingMax"
+  | "bashMode";
 
 export interface UiTheme {
   fg(color: ThemeColor, text: string): string;
@@ -139,6 +186,26 @@ export interface ExtensionAPI {
     customType: string,
     renderer: MessageRenderer<T>,
   ): void;
+  /** Register a renderer for CustomEntry — LIVE display outside the LLM
+   *  context (D43: inbound frames shown while a tool call runs). */
+  registerEntryRenderer?<T = unknown>(
+    customType: string,
+    renderer: EntryRenderer<T>,
+  ): void;
+}
+
+/** Minimal local surface of pi's EntryRenderer (D43). */
+export interface EntryRenderer<T = unknown> {
+  (
+    entry: { customType: string; data?: T },
+    options: unknown,
+    theme: RenderTheme,
+  ):
+    | {
+        render(width: number): string[];
+        invalidate(): void;
+      }
+    | undefined;
 }
 
 /** Local theme surface for renderers (D41). */

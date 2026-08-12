@@ -290,6 +290,14 @@ the turn is suspended in the tool call until all `awaitReply` missions are
 answered (or the timeout), then returns who answered (with answers) and who
 is missing. `mesh_status` lists `missions: ✓ answered / ✗ waiting`.
 
+**Per-agent colors + live view (D43)**: every alias gets a STABLE color
+(hash → 12-color theme palette) used everywhere — messages, batches, live
+entries and the HUD — so each agent is recognizable at a glance. While the
+agent is busy (a sleep or long tool call), inbound frames are ALSO rendered
+**live** in the conversation (`mesh-live` entries outside the LLM context,
+zero tokens) — the burst is visible in real time, and the batched summary
+arrives when the busy period ends.
+
 **Colored rendering (D41)**: mesh messages in the conversation are
 rendered with `pi-tui` — batch header in accent, sender aliases in
 accent, instructions muted, long lines wrapped.
