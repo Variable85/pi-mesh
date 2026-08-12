@@ -405,6 +405,13 @@ async function execMeshStatus(
       ...receipts.map((r) => `  ${r.msgId.slice(0, 18)} → @${r.alias} at ${r.at.slice(11, 19)}`),
     );
   }
+  const missions = rt.client.missionStatus();
+  if (missions.length > 0) {
+    lines.push("", "missions:");
+    for (const m of missions) {
+      lines.push(`  ${m.msgId.slice(0, 18)} → @${m.to} ${m.answered ? "✓ answered" : "✗ waiting"}`);
+    }
+  }
   return textResult(lines.join("\n"), {
     schema: "mesh.status.v1",
     alias: rt.client.alias,
@@ -444,6 +451,57 @@ function execMeshHistory(
     lines.length > 0 ? lines.join("\n") : "(empty history)",
     { schema: "mesh.history.v1", count: frames.length, withBodies },
   );
+}
+
+// ---------------------------------------------------------------- mesh_wait_all
+
+const MESH_WAIT_ALL_PARAMETERS: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    timeoutMs: {
+      type: "number",
+      minimum: MIN_AWAIT_REPLY_TIMEOUT_MS,
+      maximum: MAX_AWAIT_REPLY_TIMEOUT_MS,
+      description: "How long to wait for all answers (default 300000 = 5 min).",
+    },
+  },
+};
+
+function formatElapsed(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m${s % 60}s`;
+}
+
+async function execMeshWaitAll(
+  getRuntime: GetRuntime,
+  params: Record<string, unknown>,
+): Promise<ToolResult> {
+  const rt = getRuntime();
+  if (rt === null) return textResult("blocked: session_not_started", sendDetails({ status: "blocked", reason: "session_not_started" }));
+  const timeoutMs = Math.min(
+    MAX_AWAIT_REPLY_TIMEOUT_MS,
+    Math.max(MIN_AWAIT_REPLY_TIMEOUT_MS, typeof params.timeoutMs === "number" ? params.timeoutMs : 300_000),
+  );
+  const res = await rt.client.waitAll(timeoutMs);
+  const head = `wait_all: ${res.answered}/${res.total} answered${res.status === "timeout" ? " (TIMEOUT)" : ""} after ${formatElapsed(res.elapsedMs)}`;
+  const lines = [head];
+  for (const a of res.answers) {
+    const body = a.response.replace(/\s+/g, " ").trim();
+    lines.push(`  ✓ @${a.to}: ${body.slice(0, 140)}`);
+  }
+  for (const m of res.missing) {
+    lines.push(`  ✗ @${m.to}: NOT ANSWERED (${m.msgId.slice(0, 18)})`);
+  }
+  if (res.total === 0) lines.push("  (no awaited missions — send with awaitReply: true first)");
+  return textResult(lines.join("\n"), {
+    schema: "mesh.wait-all.v1",
+    status: res.status,
+    total: res.total,
+    answered: res.answered,
+    elapsedMs: res.elapsedMs,
+    missing: res.missing,
+  });
 }
 
 // ---------------------------------------------------------------- mesh_ledger
@@ -631,6 +689,18 @@ export function registerTools(pi: ExtensionAPI, getRuntime: GetRuntime): void {
     parameters: MESH_HISTORY_PARAMETERS,
     execute: (_toolCallId, params, _signal, _onUpdate, _ctx) =>
       Promise.resolve(execMeshHistory(getRuntime, params)),
+  });
+
+  pi.registerTool({
+    name: "mesh_wait_all",
+    label: "Mesh Wait All",
+    description:
+      "Block this turn until EVERY mission sent with awaitReply:true is answered " +
+      "(or timeout), then return the group summary — who answered, who is missing. " +
+      "The honest alternative to sleep-while-waiting: no wasted tokens, no polling.",
+    promptSnippet: "Wait for all pending mission replies and get the summary.",
+    parameters: MESH_WAIT_ALL_PARAMETERS,
+    execute: (_toolCallId, params, _signal, _onUpdate, _ctx) => execMeshWaitAll(getRuntime, params),
   });
 
   pi.registerTool({

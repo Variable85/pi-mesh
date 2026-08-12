@@ -154,6 +154,15 @@ const ALIAS_RETRY_DELAY_MS = 250;
 /** D25: a reply target stays "handled" for 30 min (duplicates dropped). */
 const HANDLED_REPLY_WINDOW_MS = 1_800_000;
 
+export interface WaitAllSummary {
+  status: "complete" | "timeout";
+  total: number;
+  answered: number;
+  elapsedMs: number;
+  missing: { msgId: string; to: string }[];
+  answers: { msgId: string; to: string; response: string }[];
+}
+
 function sleepMs(ms: number): Promise<void> {
   return new Promise((resolve) => {
     const t = setTimeout(resolve, ms);
@@ -199,6 +208,11 @@ export class MeshClient extends EventEmitter {
   private readonly readBy = new Map<string, { alias: string; at: string }>();
   /** D39: ids of replies WE sent — used to tag reply-à-reply chains. */
   private readonly sentReplies = new Set<string>();
+  /** D42: missions sent with awaitReply — who answered (for mesh_wait_all). */
+  private readonly awaitedMissions = new Map<
+    string,
+    { to: string; room: string; answered: boolean; response?: string; at?: string }
+  >();
   /** Latest known reservations per peer, fed by welcome/reserve broadcasts. */
   private readonly peerReservations = new Map<string, FileReservation[]>();
   /**
@@ -262,6 +276,83 @@ export class MeshClient extends EventEmitter {
       .reverse()
       .slice(0, limit)
       .map(([msgId, r]) => ({ msgId, alias: r.alias, at: r.at }));
+  }
+
+  // ---- D42: awaited missions (mesh_wait_all) ----
+
+  /** D42: cancel every pending awaited mission (e.g. before a reset). */
+  cancelAllAwaited(): void {
+    for (const id of [...this.awaitTargets.keys()]) {
+      this.awaitedMissions.delete(id);
+      this.pending.cancel(id, "cancelled");
+    }
+    this.awaitTargets.clear();
+  }
+
+  /** Missions sent with awaitReply and their answer state. */
+  missionStatus(): { msgId: string; to: string; answered: boolean }[] {
+    return [...this.awaitedMissions.entries()].map(([msgId, m]) => ({
+      msgId,
+      to: m.to,
+      answered: m.answered,
+    }));
+  }
+
+  /**
+   * D42: block until EVERY awaited mission is answered (or timeout), then
+   * return the honest group summary. The turn is suspended inside this tool
+   * call — no sleep, no wasted tokens; inbound replies keep flowing and the
+   * batch is delivered right after the result.
+   */
+  async waitAll(timeoutMs: number): Promise<WaitAllSummary> {
+    const start = Date.now();
+    const deadline = start + Math.max(25, timeoutMs);
+    // snapshot the missions that are STILL PENDING at call time (awaitTargets
+    // drops a mission once its send() resolved) — historical answered ones
+    // do not count.
+    const targets = [...this.awaitTargets.keys()];
+    return new Promise((resolve) => {
+      const tick = (): void => {
+        const missing = targets.filter((id) => this.awaitedMissions.get(id)?.answered !== true);
+        if (missing.length === 0) {
+          resolve(this.summarize(start, "complete", targets));
+          return;
+        }
+        if (Date.now() >= deadline) {
+          resolve(this.summarize(start, "timeout", targets));
+          return;
+        }
+        const t = setTimeout(tick, 200);
+        t.unref();
+      };
+      tick();
+    });
+  }
+
+  private summarize(
+    startMs: number,
+    status: "complete" | "timeout",
+    targets: string[],
+  ): WaitAllSummary {
+    const answers: { msgId: string; to: string; response: string }[] = [];
+    const missing: { msgId: string; to: string }[] = [];
+    for (const msgId of targets) {
+      const m = this.awaitedMissions.get(msgId);
+      if (m === undefined) continue;
+      if (m.answered && m.response !== undefined) {
+        answers.push({ msgId, to: m.to, response: m.response });
+      } else {
+        missing.push({ msgId, to: m.to });
+      }
+    }
+    return {
+      status,
+      total: targets.length,
+      answered: answers.length,
+      elapsedMs: Date.now() - startMs,
+      missing,
+      answers,
+    };
   }
 
   /** D34: send a read receipt for an inbound msgId back to its sender. */
@@ -619,7 +710,15 @@ export class MeshClient extends EventEmitter {
         const matched = replyTo !== undefined ? this.pending.handleReply(frame) : false;
         if (matched) {
           // awaited reply — the send() promise already carries the answer
-          if (replyTo !== undefined) this.markReplyHandled(replyTo, body);
+          if (replyTo !== undefined) {
+            this.markReplyHandled(replyTo, body);
+            const m = this.awaitedMissions.get(replyTo);
+            if (m !== undefined) {
+              m.answered = true;
+              m.response = body;
+              m.at = frame.ts;
+            }
+          }
           this.emit("reply", frame);
         } else if (replyTo !== undefined && this.isDuplicateReply(replyTo, body)) {
           // D25: this EXACT answer (same msgId + same body) was already
@@ -776,6 +875,7 @@ export class MeshClient extends EventEmitter {
     let pendingPromise: Promise<import("./pending.js").PendingResolution> | null = null;
     if (opts.awaitReply) {
       this.awaitTargets.set(frame.id, { to: to ?? "*", room });
+      this.awaitedMissions.set(frame.id, { to: to ?? "*", room, answered: false });
       pendingPromise = this.pending.register(frame.id, Date.now() + timeoutMs);
     }
 

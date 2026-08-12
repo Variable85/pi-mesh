@@ -42,6 +42,15 @@ duplicates, loops and confusion.
    important), but **never answer with an acknowledgment** — to react
    (question, correction), send a **new message** (`mesh_send`), not a reply.
 
+## Group waiting (delay-free)
+
+- **`mesh_wait_all { timeoutMs }`**: after sending missions with
+  `awaitReply: true`, call it instead of sleeping or polling. The turn is
+  suspended inside the tool call; it returns the honest group summary:
+  who answered (with the answer), who is missing. Re-send ONLY to the
+  missing ones.
+- `mesh_status` shows `missions:` (✓ answered / ✗ waiting) per mission.
+
 ## Orchestrator rhythm (delay-free)
 
 - **NEVER `sleep` while awaiting replies.** A `sleep` is a long tool call:

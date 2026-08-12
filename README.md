@@ -102,6 +102,7 @@ daemon management needed. Try `npm run smoke` for a full headless demo
 | `mesh_send` | `to?`, `message`, `room?`, `broadcast?`, `priority?`, `reason?`, `awaitReply?`, `timeoutMs?`, `refs?` | `delivered` / `queued_offline` / `reply: …` / `expired` / `blocked: …` |
 | `mesh_reply` | `msgId`, `message`, `replyAll?`, `to?`, `refs?` | `delivered` or `blocked: reply_without_target` |
 | `mesh_status` | `room?`, `all?` | live broker snapshot — only peers **sharing a room** (D29), with **activity status** (`○idle` / `✕stuck` when idle long with reservations, D32) and **read receipts** (`reads:` — D34); `all: true` for the whole mesh |
+| `mesh_wait_all` | `timeoutMs?` | block the turn until every awaited mission is answered (or timeout) — honest group summary: who answered, who is missing (D42) |
 | `mesh_ledger` | `limit?`, `from?`, `to?`, `room?`, `event?` | durable **hash-only** history (I1) — bodies never stored, survives restarts (D36) |
 | `mesh_history` | `limit?`, `withBodies?` | local **memory ring** (never the ledger) |
 | `mesh_reserve` | `paths`, `reason?` | reserve files/dirs — peers' `edit`/`write` get blocked on them |
@@ -283,6 +284,11 @@ instead of one turn per message. `inboundBatchMs` (250 ms, 0 = off) is
 the idle window; `inboundBatchMaxHoldMs` (30 s) is the safety cap while
 busy. Delivery: steer if the batch contains a reply/urgent, followUp
 otherwise; `force` and reminders always bypass.
+
+**Group waiting (D42)**: `mesh_wait_all` replaces sleep-while-waiting —
+the turn is suspended in the tool call until all `awaitReply` missions are
+answered (or the timeout), then returns who answered (with answers) and who
+is missing. `mesh_status` lists `missions: ✓ answered / ✗ waiting`.
 
 **Colored rendering (D41)**: mesh messages in the conversation are
 rendered with `pi-tui` — batch header in accent, sender aliases in
