@@ -262,5 +262,12 @@ export function renderVerdictEntry(
     }
     out.push(entries[i]!);
   }
+  // trailing empty line so the last colored block never touches the content
+  // that follows
+  if (bg !== undefined) {
+    out.push(bg("customMessageBg", " ".repeat(Math.max(0, width))));
+  } else {
+    out.push("");
+  }
   return out;
 }

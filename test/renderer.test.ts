@@ -151,10 +151,12 @@ describe("verdict entry (mesh-verdict, agent-colored backgrounds)", () => {
       40,
       verdictTheme as never,
     );
-    // layout: empty, header, empty, line, EMPTY, line
+    // layout: empty, header, empty, line, EMPTY, line, EMPTY(trailing)
     const gap = lines[4]!;
     assert.ok(gap.includes("<bg:customMessageBg>"), "spacing line between the two answers");
     assert.ok(!gap.includes("@agent-"), "spacing line is empty (no agent text)");
+    assert.ok(lines[6]!.includes("<bg:customMessageBg>"), "trailing empty line after the last answer");
+    assert.ok(!lines[6]!.includes("@agent-"), "trailing line is empty");
   });
 
   it("falls back to plain colored lines without a theme", () => {
