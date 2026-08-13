@@ -54,6 +54,9 @@ export function formatInboundContent(frame: MeshFrame, opts: { replyChain?: bool
   return (
     `${prefix} ${frame.body ?? ""}` +
     `\n↩ reply with the mesh_reply tool using msgId "${frame.id}"` +
+    (frame.replyTargets !== undefined && frame.replyTargets.length > 0
+      ? ` (reply goes to @${frame.replyTargets.join(", @")} — the sender designated these targets)`
+      : "") +
     (frame.broadcast === true
       ? ` (broadcast to ${frame.totalCount ?? "?"} members — use replyAll to answer the room, or reply to just @${frame.from ?? "?"})`
       : "")

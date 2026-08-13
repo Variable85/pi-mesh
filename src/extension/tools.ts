@@ -11,6 +11,7 @@ import {
   MAX_AWAIT_REPLY_TIMEOUT_MS,
   MAX_BODY_BYTES,
   MAX_REFS,
+  MAX_REPLY_TARGETS,
   MIN_AWAIT_REPLY_TIMEOUT_MS,
   TRANSCRIPT_RING_SIZE,
 } from "../shared/config.js";
@@ -107,7 +108,12 @@ const MESH_SEND_PARAMETERS: Record<string, unknown> = {
   properties: {
     to: { type: "string", description: "Target alias ('@' tolerated, case-insensitive). OMIT when broadcast: true." },
     message: { type: "string", description: "Message body (1..32 KiB)." },
-    room: { type: "string", description: "Room id (default: 'default'). Required for broadcast." },
+    room: {
+      type: "string",
+      description: "Room id. Default: 'default' when still joined, else your " +
+        "first joined room (a session that left 'default' sends into its " +
+        "remaining room). Required for broadcast.",
+    },
     broadcast: {
       type: "boolean",
       description: "Fan out to EVERY member of room (to must be omitted). Returns deliveredCount/totalCount.",
@@ -141,6 +147,15 @@ const MESH_SEND_PARAMETERS: Record<string, unknown> = {
       maxItems: MAX_REFS,
       description: "Repo-relative reference paths (≤ 8).",
     },
+    replyTo: {
+      type: "array",
+      items: { type: "string" },
+      maxItems: MAX_REPLY_TARGETS,
+      description: "Alias(es) that should receive the reply instead of the sender " +
+        "(default: the sender). The recipient's mesh_reply without an explicit " +
+        "`to` goes to ALL of them. Include yourself to also get the answer " +
+        "(e.g. with awaitReply).",
+    },
   },
   required: ["to", "message"],
 };
@@ -167,7 +182,13 @@ async function execMeshSend(
   // so ledger predicates are insensitive to how the model typed the alias.
   // Guards (checkSend) and client.send normalize idempotently; result text unchanged.
   const to = toRaw !== undefined ? normalizeAlias(toRaw) : "*"; // '*' = broadcast target
-  const room = str(params.room) ?? DEFAULT_ROOM;
+  // Room resolution mirrors the client: explicit room wins; otherwise
+  // "default" when still joined, else the FIRST joined room. A session
+  // that left "default" (e.g. agent-master in cs-room only) must NOT
+  // default its sends to "default" — the broker would refuse not_member.
+  const room =
+    str(params.room) ??
+    (rt.client.rooms.includes(DEFAULT_ROOM) ? DEFAULT_ROOM : rt.client.rooms[0] ?? DEFAULT_ROOM);
   const priority = (str(params.priority) ?? "normal") as MeshPriority;
   const reason = str(params.reason);
   const awaitReply = params.awaitReply === true;
@@ -177,6 +198,11 @@ async function execMeshSend(
   const refs = Array.isArray(params.refs)
     ? params.refs.filter((r): r is string => typeof r === "string")
     : undefined;
+  const replyTo = Array.isArray(params.replyTo)
+    ? params.replyTo.filter((r): r is string => typeof r === "string")
+    : str(params.replyTo) !== undefined
+      ? [str(params.replyTo) as string]
+      : undefined;
   const bodyHash = sha256(message);
   const reasonHash = priority === "force" && reason !== undefined ? sha256(reason) : undefined;
 
@@ -210,7 +236,7 @@ async function execMeshSend(
 
   const res = await rt.client.send({
     to: broadcast ? undefined : to,
-    message, room, priority, reason, awaitReply, block, timeoutMs, refs, broadcast,
+    message, room, priority, reason, awaitReply, block, timeoutMs, refs, broadcast, replyTo,
   });
 
   // `delivered` is ledgered ONLY here — after the broker ack (client.send
@@ -267,6 +293,17 @@ const MESH_REPLY_PARAMETERS: Record<string, unknown> = {
   properties: {
     msgId: { type: "string", description: "Exact msgId of an inbound message (I5 strict correlation)." },
     message: { type: "string", description: "Reply body (1..32 KiB)." },
+    to: {
+      type: "string",
+      description: "Override the reply target: by default the reply goes to the " +
+        "original sender — or to the alias(es) the sender designated with " +
+        "replyTo on the original message. Use `to` to send it elsewhere.",
+    },
+    replyAll: {
+      type: "boolean",
+      description: "Fan the answer out to the whole room of the original message " +
+        "(mutually exclusive with `to`).",
+    },
     refs: { type: "array", items: { type: "string" }, maxItems: MAX_REFS },
   },
   required: ["msgId", "message"],
@@ -793,7 +830,9 @@ export function registerTools(pi: ExtensionAPI, getRuntime: GetRuntime): void {
       "delivered/queued_offline are NOT completions. " +
       "An 'expired' awaitReply is NOT a lost message: late replies are " +
       "delivered and injected automatically — do not re-send the request, " +
-      "check mesh_history first.",
+      "check mesh_history first. " +
+      "replyTo: [aliases] designates who receives the reply instead of you " +
+      "(include yourself to also get the answer, e.g. with awaitReply).",
     parameters: MESH_SEND_PARAMETERS,
     execute: (_toolCallId, params, _signal, _onUpdate, _ctx) => execMeshSend(getRuntime, params),
   });
@@ -809,7 +848,10 @@ export function registerTools(pi: ExtensionAPI, getRuntime: GetRuntime): void {
     promptGuidelines:
       "Only msgIds seen in inbound [mesh] messages are valid targets. " +
       "Replies interrupt the recipient (steer). If the result warns " +
-      "'already replied', you already answered this msgId — do not re-answer.",
+      "'already replied', you already answered this msgId — do not re-answer. " +
+      "By default the reply goes to the original sender — or to the alias(es) " +
+      "the sender designated with replyTo (shown as 'reply goes to @X' on the " +
+      "inbound message). Override with to: (single) or replyAll: true (room).",
     parameters: MESH_REPLY_PARAMETERS,
     execute: (_toolCallId, params, _signal, _onUpdate, _ctx) => execMeshReply(getRuntime, params),
   });

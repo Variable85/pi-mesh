@@ -6,6 +6,7 @@ import {
   MAX_FRAME_ID_CHARS,
   MAX_REFS,
   MAX_REF_CHARS,
+  MAX_REPLY_TARGETS,
   ROOM_REGEX,
   SHA256_HEX_REGEX,
 } from "../shared/config.js";
@@ -44,6 +45,9 @@ export interface MeshFrame {
   to?: string;
   room?: string;
   replyTo?: string;
+  /** msg: aliases the sender designates to receive the reply (default: the
+  *  sender). reply: fan-out targets chosen by the replier. */
+  replyTargets?: string[];
   priority?: MeshPriority;
   body?: string; // TRANSIENT — never persisted 
   bodyHash?: string;
@@ -209,6 +213,7 @@ export interface BuildFrameOpts {
   to?: string;
   room?: string;
   replyTo?: string;
+  replyTargets?: string[];
   priority?: MeshPriority;
   body?: string;
   refs?: string[];
@@ -247,6 +252,7 @@ export function buildFrame(opts: BuildFrameOpts): MeshFrame {
   if (opts.to !== undefined) frame.to = opts.to;
   if (opts.room !== undefined) frame.room = opts.room;
   if (opts.replyTo !== undefined) frame.replyTo = opts.replyTo;
+  if (opts.replyTargets !== undefined) frame.replyTargets = [...opts.replyTargets];
   if (opts.priority !== undefined) frame.priority = opts.priority;
   if (opts.body !== undefined) {
     frame.body = opts.body;
@@ -377,6 +383,24 @@ export function validateFrame(value: unknown, opts: ValidateOpts = {}): Validati
   }
   if (value.replyTo !== undefined && typeof value.replyTo !== "string") {
     return { ok: false, code: "invalid_frame", detail: "bad replyTo" };
+  }
+
+  // Rule 6b: replyTargets — bounded alias list on msg/reply frames
+  if (value.replyTargets !== undefined) {
+    if (!Array.isArray(value.replyTargets) || value.replyTargets.length === 0 || value.replyTargets.length > MAX_REPLY_TARGETS) {
+      return { ok: false, code: "invalid_frame", detail: "bad replyTargets" };
+    }
+    for (const t of value.replyTargets) {
+      if (typeof t !== "string" || !isValidAlias(t)) {
+        return { ok: false, code: "invalid_frame", detail: "bad replyTarget" };
+      }
+    }
+    if (value.type !== "msg" && value.type !== "reply") {
+      return { ok: false, code: "invalid_frame", detail: "replyTargets on non-msg/reply" };
+    }
+    if (value.type === "reply" && value.to !== undefined) {
+      return { ok: false, code: "invalid_frame", detail: "replyTargets with to" };
+    }
   }
 
   // Rule 7: refs

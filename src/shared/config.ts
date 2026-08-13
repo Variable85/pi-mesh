@@ -11,6 +11,8 @@ export const MAX_BODY_BYTES = 32_768; // 32 KiB
 export const MAX_FRAME_ID_CHARS = 64;
 export const MAX_REFS = 8;
 export const MAX_REF_CHARS = 256;
+/** max aliases a sender can designate to receive the reply. */
+export const MAX_REPLY_TARGETS = 8;
 
 // ---- Timeouts ----
 export const HELLO_TIMEOUT_MS = 5_000;

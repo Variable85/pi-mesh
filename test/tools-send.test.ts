@@ -12,11 +12,12 @@ import { registerTools, type MeshRuntime } from "../src/extension/tools.js";
 import type { SendResult } from "../src/client/client.js";
 import { makeTempDirs } from "./helpers.js";
 
-function makeRuntime(stateDir: string, sendResult: SendResult): { rt: MeshRuntime; ledger: MeshLedger } {
+function makeRuntime(stateDir: string, sendResult: SendResult, rooms: string[] = ["default"]): { rt: MeshRuntime; ledger: MeshLedger } {
   const ledger = new MeshLedger(stateDir);
   const rt = {
     client: {
       alias: "alice",
+      rooms,
       isOnline: () => true,
       send: () => Promise.resolve(sendResult),
       connect: () => Promise.reject(new Error("must not connect in these tests")),
@@ -80,5 +81,49 @@ describe("mesh_send ledger canonical alias (A8)", () => {
     // details mirror the canonical alias
     assert.equal(res.details?.to, "bob");
     assert.equal(res.details?.status, "delivered");
+  });
+
+  it("no room param → resolves to the first joined room when 'default' was left", async (t) => {
+    const dirs = makeTempDirs();
+    t.after(() => dirs.cleanup());
+    // session in cs-room ONLY (left 'default') — sends must NOT default to
+    // "default" (the broker would refuse not_member).
+    const { rt, ledger } = makeRuntime(dirs.stateDir, { status: "delivered", msgId: "m_s_22222222" }, ["cs-room"]);
+    const tools = toolRuntime(rt);
+    const tool = tools.get("mesh_send");
+    assert.ok(tool, "mesh_send tool registered");
+
+    const res = await tool.execute(
+      "tc2",
+      { to: "bob", message: "hello cs" },
+      undefined,
+      undefined,
+      {} as unknown as SessionContext,
+    );
+    assert.equal(res.content[0]!.text, "delivered m_s_22222222");
+    const recs = ledgerRecords(ledger);
+    assert.equal(recs[0]?.room, "cs-room", "ledger 'sent' must record the resolved room");
+    assert.equal(recs[1]?.room, "cs-room", "ledger 'delivered' must record the resolved room");
+    assert.equal(res.details?.room, "cs-room");
+  });
+
+  it("explicit room param still wins over the joined rooms", async (t) => {
+    const dirs = makeTempDirs();
+    t.after(() => dirs.cleanup());
+    const { rt, ledger } = makeRuntime(dirs.stateDir, { status: "delivered", msgId: "m_s_33333333" }, ["cs-room"]);
+    const tools = toolRuntime(rt);
+    const tool = tools.get("mesh_send");
+    assert.ok(tool, "mesh_send tool registered");
+
+    const res = await tool.execute(
+      "tc3",
+      { to: "bob", message: "explicit", room: "ops" },
+      undefined,
+      undefined,
+      {} as unknown as SessionContext,
+    );
+    assert.equal(res.content[0]!.text, "delivered m_s_33333333");
+    const recs = ledgerRecords(ledger);
+    assert.equal(recs[0]?.room, "ops");
   });
 });

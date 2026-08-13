@@ -41,7 +41,9 @@ local broker (NDJSON frames over a unix socket or named pipe, protocol
   hello; senders get the honest `queued_offline` status.
 - **Broadcast & reply variants** — `broadcast: true` fans out to a whole
   room (honest `deliveredCount/totalCount`), `mesh_reply` supports
-  `replyAll` and targeted `to:` replies.
+  `replyAll` and targeted `to:` replies. `mesh_send` `replyTo: [aliases]`
+  designates WHO receives the reply instead of the sender (single or
+  several; default: the sender).
 - **Group orchestration** — `mesh_wait_all` + launch mode (`awaitReply: true,
   block: false`): send a mission burst, then get ONE honest group verdict
   (who answered with the answer, who is missing). No sleep, no polling.
@@ -112,7 +114,7 @@ No daemon management needed. Try `npm run smoke` for a full headless demo
 
 | tool | params | returns (honest one-liner + `details`) |
 |---|---|---|
-| `mesh_send` | `to?`, `message`, `room?`, `broadcast?`, `priority?`, `reason?`, `awaitReply?`, `block?`, `timeoutMs?`, `refs?` | `delivered` / `queued_offline` / `reply: …` / `expired` / `blocked: …` |
+| `mesh_send` | `to?`, `message`, `room?`, `broadcast?`, `priority?`, `reason?`, `awaitReply?`, `block?`, `timeoutMs?`, `refs?`, `replyTo?` | `delivered` / `queued_offline` / `reply: …` / `expired` / `blocked: …` |
 | `mesh_reply` | `msgId`, `message`, `replyAll?`, `to?`, `refs?` | `delivered` or `blocked: reply_without_target` |
 | `mesh_wait_all` | `timeoutMs?` | block the turn until every awaited mission is answered (or timeout) — group verdict: who answered (with the answer), who is missing |
 | `mesh_status` | `room?`, `all?` | live broker snapshot — peers sharing a room, per-peer version (`⚠` on skew), turn state (`● working / ○ idle / ✕ stuck`), `likely done` summary, read receipts, missions, broker counters |

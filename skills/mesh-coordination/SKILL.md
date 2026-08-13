@@ -8,6 +8,21 @@ description: Guide for using the multi-agent mesh (pi-mesh) — messaging, repli
 You are connected to a local mesh of pi agents. Rules and reflexes to avoid
 duplicates, loops and confusion.
 
+## Know your identity
+
+- Your alias is injected at session start: `[mesh] you are @<alias> (rooms: …)`.
+  It is **stable across /reload** and only changes via `/mesh alias <name>`,
+  `/mesh reset` (fresh random alias) or `/mesh new` (identity handed to the
+  next session).
+- The pi session name `mesh @<alias> · <rooms>` mirrors that identity — it is
+  NOT a separate agent.
+- **If in doubt, `mesh_status` shows your alias** (first line) and who is
+  online. Never guess who you are from the conversation alone.
+- A session that inherits an alias (e.g. `/mesh new` handoff) IS that agent:
+  same alias, same rooms, same reservations.
+- You can NEVER take an alias held by a live peer (`alias_taken`): the error
+  names the holder. Close that session first, or pick another alias.
+
 ## Get oriented
 
 - `mesh_status` — who is online, in which room, **status** (`○idle`,
@@ -20,9 +35,22 @@ duplicates, loops and confusion.
 
 - `mesh_send { to: "agent-X", message }` — direct message (shared room
   required).
+- **Room resolution**: without an explicit `room`, the message goes to
+  `default` when you are still in it, otherwise to your FIRST joined room.
+  A session that left `default` (e.g. only in `cs-room`) sends into its
+  remaining room — never assume `default`. If in doubt, `mesh_status` shows
+  your rooms.
 - `mesh_send { broadcast: true, room: "cs-room", message }` — announce to the
   whole room (the result reports `delivered N/M`).
 - `awaitReply: true` waits for an answer (30 min default timeout).
+- **`replyTo: ["agent-Y", "agent-Z"]`** — designate WHO receives the reply
+  instead of you (single alias or list). The recipient's plain `mesh_reply`
+  then goes to ALL of them. Include yourself in the list if you also want the
+  answer (e.g. with `awaitReply`). Default: the reply comes back to the
+  sender.
+- A message whose sender set `replyTo` shows `(reply goes to @Y, @Z)` —
+  answer it with `mesh_reply` as usual; it will be routed to those targets.
+  You can still override with `to:` (single) or `replyAll: true` (room).
 
 ## Replying (GOLDEN RULES)
 
@@ -53,7 +81,11 @@ duplicates, loops and confusion.
    who answered (with the answer), who is missing. Fast answers that
    arrived before the call are included; already-verdict'd missions are
    not re-listed.
-3. Re-send ONLY to the missing (`✗ NOT ANSWERED`).
+3. **ESC cancels a pending `mesh_wait_all`** — the verdict says
+   `(CANCELLED — ESC)` and reports NOTHING: the missions stay reportable,
+   so a later `mesh_wait_all` re-lists them. Use it to abort a long wait
+   without losing the batch.
+4. Re-send ONLY to the missing (`✗ NOT ANSWERED`).
 - Never poll with `mesh_history`/`mesh_status` to check who answered —
   that is what `mesh_wait_all` is for.
 - `block: false` without `awaitReply` is refused; `awaitReply` without

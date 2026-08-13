@@ -160,6 +160,39 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
       else sendAck(from, frame.id, "dropped_offline");
     });
   };
+  /** replyTargets — fan the answer out to the designated aliases (online
+  *  only, like every reply). Ack carries deliveredCount/totalCount. */
+  const routeReplyTargets = (from: PeerRecord, frame: MeshFrame): void => {
+    const targets = frame.replyTargets ?? [];
+    const writes: Promise<boolean>[] = [];
+    let total = 0;
+    for (const alias of targets) {
+      if (alias === from.alias) continue;
+      const t = state.peers.get(alias);
+      if (t !== undefined && t.helloDone && !t.socket.destroyed) {
+        total += 1;
+        const target = t;
+        writes.push(
+          new Promise<boolean>((resolve) => {
+            writeFrame(target.socket, frame, config.maxFrameBytes, (ok) => {
+              if (ok) {
+                state.stats.relayed += 1;
+                resolve(true);
+              } else {
+                if (state.peers.get(target.alias) === target) closePeer(state, target.alias, "write_failure");
+                resolve(false);
+              }
+            });
+          }),
+        );
+      }
+    }
+    void Promise.all(writes).then((results) => {
+      const delivered = results.filter(Boolean).length;
+      if (delivered > 0) sendAck(from, frame.id, "delivered", undefined, delivered, total);
+      else sendAck(from, frame.id, "dropped_offline");
+    });
+  };
 
 
 // ---- handlers ----
@@ -456,6 +489,7 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
           break;
         }
         if (frame.replyAll === true) routeReplyAll(peer, frame);
+        else if (frame.replyTargets !== undefined) routeReplyTargets(peer, frame);
         else routeOnlineOnly(peer, frame, false);
         break;
       case "remind":

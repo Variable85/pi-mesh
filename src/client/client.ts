@@ -31,6 +31,7 @@ import {
   MAX_AWAIT_REPLY_TIMEOUT_MS,
   MAX_BODY_BYTES,
   MAX_REFS,
+  MAX_REPLY_TARGETS,
   MIN_AWAIT_REPLY_TIMEOUT_MS,
   OUTBOX_FLUSH_CAP,
   STATUS_REQ_TIMEOUT_MS,
@@ -72,6 +73,11 @@ export interface SendOpts {
   refs?: string[];
   /** fan out to every room member (room required, to must be absent). */
   broadcast?: boolean;
+  /** aliases that should receive the reply instead of the sender
+  *  (default: the sender). Single alias or list — the recipient's
+  *  mesh_reply without an explicit `to` goes to ALL of them. Include
+  *  yourself if you also want the answer (e.g. with awaitReply). */
+  replyTo?: string | string[];
 }
 
 export interface ReplyOpts {
@@ -995,6 +1001,18 @@ export class MeshClient extends EventEmitter {
         return { status: "error", reason: "invalid_frame: bad refs" };
       }
     }
+  // replyTo: normalize to a bounded alias list (single or several).
+    let replyTargets: string[] | undefined;
+    if (opts.replyTo !== undefined) {
+      const raw = Array.isArray(opts.replyTo) ? opts.replyTo : [opts.replyTo];
+      if (raw.length === 0 || raw.length > MAX_REPLY_TARGETS) {
+        return { status: "error", reason: "invalid_frame: bad replyTo" };
+      }
+      replyTargets = raw.map(normalizeAlias);
+      if (!replyTargets.every(isValidAlias)) {
+        return { status: "error", reason: "invalid_alias" };
+      }
+    }
     const priority = opts.priority ?? "normal";
     if (priority === "force" && (opts.reason === undefined || opts.reason.trim() === "")) {
       return { status: "error", reason: "force_requires_reason" };
@@ -1028,6 +1046,7 @@ export class MeshClient extends EventEmitter {
       body: opts.message,
       refs: opts.refs,
       broadcast: broadcast ? true : undefined,
+      replyTargets,
       reasonHash: priority === "force" ? sha256(opts.reason ?? "") : undefined,
       expiresAt,
     });
@@ -1169,7 +1188,57 @@ export class MeshClient extends EventEmitter {
   //  - default: to the original sender (1:1)
   //  - to=<alias>: targeted at another member of the conversation
   //  - replyAll: fan out to the whole room of the original message
-    const target = replyAll === true ? undefined : to !== undefined ? normalizeAlias(to) : original.from;
+  //  - the original msg may carry replyTargets (sender-designated): the
+  //    default reply then fans out to ALL of them instead of the sender.
+    const designated = original.replyTargets;
+    const target =
+      replyAll === true
+        ? undefined
+        : to !== undefined
+          ? normalizeAlias(to)
+          : designated !== undefined && designated.length > 0
+            ? undefined
+            : original.from;
+    if (replyAll !== true && to === undefined && designated !== undefined && designated.length > 0) {
+  // fan-out to the sender-designated targets (bounded, validated at send)
+      if (designated.length > MAX_REPLY_TARGETS) {
+        return { status: "error", msgId, reason: "invalid_frame: bad replyTargets" };
+      }
+      const frame = buildFrame({
+        type: "reply",
+        from: this.alias,
+        room: original.room,
+        replyTo: msgId,
+        replyTargets: [...designated],
+        body,
+        refs,
+      });
+      const ackPromise = this.waitAck(frame.id);
+      this.writeOrQueue(frame);
+      this.ring(frame);
+      const ack = await ackPromise;
+      if (ack.type === "error") {
+        return { status: "error", msgId: frame.id, reason: ack.code ?? "internal" };
+      }
+      if (ack.status === "dropped_offline") {
+        return { status: "error", msgId: frame.id, reason: "dropped_offline" };
+      }
+      this.sentReplies.add(frame.id);
+      if (this.sentReplies.size > 512) {
+        let dropped = 0;
+        for (const id of this.sentReplies) {
+          if (dropped >= 256) break;
+          this.sentReplies.delete(id);
+          dropped += 1;
+        }
+      }
+      return {
+        status: "delivered",
+        msgId: frame.id,
+        deliveredCount: ack.deliveredCount,
+        totalCount: ack.totalCount,
+      };
+    }
     if (replyAll !== true && (target === undefined || !isValidAlias(target))) {
       return { status: "error", msgId, reason: "invalid_alias" };
     }

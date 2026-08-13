@@ -214,12 +214,16 @@ export function attachClientListeners(
         : "";
     let context =
       `[mesh] you are @${client.alias} (rooms: ${roomList}). ` +
+      `Your alias is stable across /reload; it changes only via /mesh alias, ` +
+      `/mesh reset or /mesh new — if in doubt, mesh_status shows your alias. ` +
       `${peerLine}${farLine} ` +
       `mesh_send/mesh_reply to talk, mesh_status for a live snapshot, ` +
       `mesh_reserve to claim files before editing them. ` +
   // the general orchestrator pattern — launch bursts, wait_all once
       `Mission bursts: mesh_send(..., awaitReply: true, block: false) then ` +
-      `mesh_wait_all for the group verdict — never mesh_history to check.`;
+      `mesh_wait_all for the group verdict — never mesh_history to check. ` +
+      `ESC cancels a pending mesh_wait_all (verdict CANCELLED, missions stay reportable). ` +
+      `mesh_send replyTo: [aliases] designates who receives the reply instead of you.`;
   // a /mesh new handoff may carry the previous session's history —
   // inject it as context so the fresh conversation keeps the thread.
     if (rt.pendingHistory !== undefined && rt.pendingHistory.length > 0) {
