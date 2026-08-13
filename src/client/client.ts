@@ -168,7 +168,7 @@ const HANDLED_REPLY_WINDOW_MS = 1_800_000;
 const RECENT_ANSWER_WINDOW_MS = 300_000; // 5 min
 
 export interface WaitAllSummary {
-  status: "complete" | "timeout";
+  status: "complete" | "timeout" | "cancelled";
   total: number;
   answered: number;
   elapsedMs: number;
@@ -377,7 +377,7 @@ export class MeshClient extends EventEmitter {
   * answered recently (≤ 5 min) that no previous verdict reported yet — a
   * fast answer that resolved before this call must still be in the summary.
   */
-  async waitAll(timeoutMs: number): Promise<WaitAllSummary> {
+  async waitAll(timeoutMs: number, signal?: AbortSignal): Promise<WaitAllSummary> {
     const start = Date.now();
     const deadline = start + Math.max(25, timeoutMs);
     const now = Date.now();
@@ -389,31 +389,47 @@ export class MeshClient extends EventEmitter {
     }
     const targetList = [...targets];
     return new Promise((resolve) => {
-      const finish = (status: "complete" | "timeout"): void => {
+      let settled = false;
+      const done = (status: "complete" | "timeout" | "cancelled"): void => {
+        if (settled) return;
+        settled = true;
+        if (signal !== undefined) signal.removeEventListener("abort", onAbort);
+        if (status !== "cancelled") {
   // answered missions of this verdict are reported once — a
   // later wait_all (next batch) must not re-list them. Missions still
-  // missing stay reportable (the agent may wait again for them).
-        for (const id of targetList) {
-          if (this.awaitedMissions.get(id)?.answered === true) this.reportedMissions.add(id);
-        }
-        if (this.reportedMissions.size > 512) {
-          let dropped = 0;
-          for (const id of this.reportedMissions) {
-            if (dropped >= 256) break;
-            this.reportedMissions.delete(id);
-            dropped += 1;
+  // missing stay reportable (the agent may wait again for them). A
+  // CANCELLED verdict reports nothing: the agent may re-wait for the
+  // same batch after the interrupt.
+          for (const id of targetList) {
+            if (this.awaitedMissions.get(id)?.answered === true) this.reportedMissions.add(id);
+          }
+          if (this.reportedMissions.size > 512) {
+            let dropped = 0;
+            for (const id of this.reportedMissions) {
+              if (dropped >= 256) break;
+              this.reportedMissions.delete(id);
+              dropped += 1;
+            }
           }
         }
         resolve(this.summarize(start, status, targetList));
       };
+      const onAbort = (): void => done("cancelled");
+      if (signal !== undefined) {
+        if (signal.aborted) {
+          done("cancelled");
+          return;
+        }
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
       const tick = (): void => {
         const missing = targetList.filter((id) => this.awaitedMissions.get(id)?.answered !== true);
         if (missing.length === 0) {
-          finish("complete");
+          done("complete");
           return;
         }
         if (Date.now() >= deadline) {
-          finish("timeout");
+          done("timeout");
           return;
         }
         const t = setTimeout(tick, 200);
@@ -425,7 +441,7 @@ export class MeshClient extends EventEmitter {
 
   private summarize(
     startMs: number,
-    status: "complete" | "timeout",
+    status: "complete" | "timeout" | "cancelled",
     targets: string[],
   ): WaitAllSummary {
     const answers: { msgId: string; to: string; response: string }[] = [];
@@ -742,14 +758,17 @@ export class MeshClient extends EventEmitter {
 
   /** Post-handshake wiring: frames dispatched, close → reconnect w/ backoff. */
   private attachSocket(socket: Socket, _decoder: FrameDecoder): void {
-    socket.on("close", () => this.onSocketClosed());
+    socket.on("close", () => this.onSocketClosed(socket));
     socket.on("error", () => {});
   }
 
-  private onSocketClosed(): void {
+  private onSocketClosed(closedSocket?: Socket): void {
   // An explicit connect is in flight — it owns the socket lifecycle.
-  // Ignore stale closes from sockets we have already replaced (rename path).
     if (this.connecting) return;
+  // Ignore stale closes from sockets we have already replaced (rename
+  // retry loop, late close of a detached socket): only the CURRENT
+  // socket's close may tear the connection down.
+    if (closedSocket !== undefined && this.socket !== closedSocket) return;
     const wasOnline = this.online;
     this.online = false;
     this.socket = null;
@@ -1391,11 +1410,27 @@ export class MeshClient extends EventEmitter {
 
   // 2. re-hello under the new alias. NO alias_fallback here: rename
   //  handles alias_taken itself (restore the previous identity below).
+  //  A transient alias_taken is RETRIED with backoff: right after
+  //  /mesh reset (or a crashed session), the old socket's close may not
+  //  have reached the broker yet — a single attempt would fail the
+  //  rename even though the alias is about to be free. intentionallyClosed
+  //  stays true during the retries so onSocketClosed never schedules a
+  //  competing reconnect.
     this.aliasInternal = target;
-    this.intentionallyClosed = false;
-    try {
-      await this.doConnect();
-    } catch (err) {
+    let lastErr: unknown;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await this.doConnect();
+        lastErr = undefined;
+        break;
+      } catch (err) {
+        lastErr = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!msg.includes("alias_taken") || attempt >= ALIAS_RETRY_ATTEMPTS) break;
+        await sleepMs(ALIAS_RETRY_DELAY_MS * 2 ** attempt);
+      }
+    }
+    if (lastErr !== undefined) {
   // restore the previous identity so the session stays usable
       this.aliasInternal = oldAlias;
       this.intentionallyClosed = true;
@@ -1404,9 +1439,10 @@ export class MeshClient extends EventEmitter {
       } catch {
   // broker down entirely — nothing more we can do
       }
-      const detail = err instanceof Error ? err.message : String(err);
+      const detail = lastErr instanceof Error ? lastErr.message : String(lastErr);
       return { ok: false, reason: detail.includes("alias_taken") ? "alias_taken" : detail };
     }
+    this.intentionallyClosed = false;
     this.emit("renamed", { from: oldAlias, to: target });
     return { ok: true, alias: target };
   }

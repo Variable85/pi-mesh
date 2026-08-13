@@ -161,7 +161,21 @@ async function cmdAlias(rt: MeshRuntime, ctx: SessionContext, alias: string | un
       notify(ctx, `mesh alias: @${rt.client.alias}`);
     }
   } else {
-    notify(ctx, `mesh: rename to "${alias}" failed: ${renamed.reason}`);
+    let hint = "";
+    if (renamed.reason === "alias_taken") {
+  // tell the user WHO holds the alias — a live peer keeps it until it
+  // disconnects, so a rename can never steal it.
+      try {
+        const snap = await rt.client.status();
+        const holder = snap.peers.find((p) => p.alias === alias);
+        if (holder !== undefined) {
+          hint = ` — @${holder.alias} is connected${holder.since !== undefined ? ` since ${holder.since}` : ""}`;
+        }
+      } catch {
+  // best effort — the hint must never break the error path
+      }
+    }
+    notify(ctx, `mesh: rename to "${alias}" failed: ${renamed.reason}${hint}`);
   }
 }
 
@@ -235,11 +249,16 @@ async function cmdReset(
   // best effort
     }
   });
-  fresh.connect().catch(() => {
+  try {
+    await fresh.connect();
+    updateSessionName(pi, rt);
+    notify(
+      ctx,
+      `mesh: identity reset — was @${oldAlias}, now @${fresh.alias} (rooms: ${fresh.rooms.join(",") || "default"})`,
+    );
+  } catch {
     notify(ctx, "mesh: reset — broker unavailable, tools answer blocked");
-  });
-  updateSessionName(pi, rt);
-  notify(ctx, `mesh: identity reset — was @${oldAlias}, reconnecting with a fresh identity…`);
+  }
 }
 
 function cmdLog(rt: MeshRuntime, ctx: SessionContext, arg: string | undefined): void {

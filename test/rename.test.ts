@@ -129,4 +129,25 @@ describe("client: in-flight alias rename", () => {
     assert.equal(res.status, "delivered");
     await bob.leave("work");
   });
+
+  it("rename retries a transient alias_taken (close-propagation race)", async () => {
+    // Simulate the broker still holding the target alias for a moment —
+    // the old socket's close has not propagated yet (e.g. right after
+    // /mesh reset, when the user immediately re-aliases). The rename
+    // must retry with backoff and succeed once the alias is released.
+    const fakeSocket = { destroyed: false } as unknown as import("node:net").Socket;
+    broker.state.peers.set("bob", {
+      alias: "bob",
+      socket: fakeSocket,
+      rooms: new Map(),
+      connectedAt: Date.now(),
+      lastSeenAt: Date.now(),
+      helloDone: true,
+      reservations: [],
+    });
+    setTimeout(() => broker.state.peers.delete("bob"), 400).unref();
+    const res = await alice.rename("bob");
+    assert.equal(res.ok, true);
+    assert.equal(alice.alias, "bob");
+  });
 });

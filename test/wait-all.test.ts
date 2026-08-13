@@ -150,6 +150,27 @@ describe("waitAll (D42)", () => {
     assert.equal(m!.status, "expired");
   });
 
+  it("ESC (AbortSignal) cancels a pending wait_all early, reporting nothing", async () => {
+    lead.cancelAllAwaited();
+    // bob never answers — wait_all would block until the timeout.
+    const res = await lead.send({ to: "bob", message: "esc me", awaitReply: true, block: false, timeoutMs: 30_000 });
+    assert.equal(res.status, "delivered");
+    const ac = new AbortController();
+    const p = lead.waitAll(30_000, ac.signal);
+    setTimeout(() => ac.abort(), 300).unref();
+    const verdict = await p;
+    assert.equal(verdict.status, "cancelled");
+    assert.equal(verdict.total, 1);
+    assert.equal(verdict.answered, 0);
+    assert.equal(verdict.missing.length, 1);
+  // a cancelled verdict reports NOTHING — the mission stays reportable
+  // so a later wait_all (after the interrupt) still lists it.
+    const again = await lead.waitAll(500);
+    assert.equal(again.status, "timeout");
+    assert.equal(again.total, 1);
+    assert.equal(again.missing.length, 1);
+  });
+
 });
 
 

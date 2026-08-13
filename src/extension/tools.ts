@@ -602,6 +602,7 @@ function formatElapsed(ms: number): string {
 async function execMeshWaitAll(
   getRuntime: GetRuntime,
   params: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<ToolResult> {
   const rt = getRuntime();
   if (rt === null) return textResult("blocked: session_not_started", sendDetails({ status: "blocked", reason: "session_not_started" }));
@@ -609,8 +610,8 @@ async function execMeshWaitAll(
     MAX_AWAIT_REPLY_TIMEOUT_MS,
     Math.max(MIN_AWAIT_REPLY_TIMEOUT_MS, typeof params.timeoutMs === "number" ? params.timeoutMs : 300_000),
   );
-  const res = await rt.client.waitAll(timeoutMs);
-  const head = `wait_all: ${res.answered}/${res.total} answered${res.status === "timeout" ? " (TIMEOUT)" : ""} after ${formatElapsed(res.elapsedMs)}`;
+  const res = await rt.client.waitAll(timeoutMs, signal);
+  const head = `wait_all: ${res.answered}/${res.total} answered${res.status === "timeout" ? " (TIMEOUT)" : res.status === "cancelled" ? " (CANCELLED — ESC)" : ""} after ${formatElapsed(res.elapsedMs)}`;
   const lines = [head];
   for (const a of res.answers) {
     const body = a.response.replace(/\s+/g, " ").trim();
@@ -845,7 +846,7 @@ export function registerTools(pi: ExtensionAPI, getRuntime: GetRuntime): void {
       "The honest alternative to sleep-while-waiting: no wasted tokens, no polling.",
     promptSnippet: "Wait for all pending mission replies and get the summary.",
     parameters: MESH_WAIT_ALL_PARAMETERS,
-    execute: (_toolCallId, params, _signal, _onUpdate, _ctx) => execMeshWaitAll(getRuntime, params),
+    execute: (_toolCallId, params, signal, _onUpdate, _ctx) => execMeshWaitAll(getRuntime, params, signal),
   });
 
   pi.registerTool({
