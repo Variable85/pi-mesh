@@ -4,6 +4,7 @@
 import { MeshClient, type WelcomeInfo } from "../client/client.js";
 import { loadConfig } from "../shared/config.js";
 import { runtimeDir, stateDir } from "../shared/paths.js";
+import { statSync } from "node:fs";
 import { registerCommands } from "./commands.js";
 import { MeshGuards } from "./guards.js";
 import { MeshHud } from "./hud.js";
@@ -18,6 +19,7 @@ import { findConflict } from "./reservations.js";
 import { registerTools, type MeshRuntime } from "./tools.js";
 import { providerErrorState, providerErrorStateFromMessage } from "./provider-errors.js";
 import { MeshTranscript } from "./transcript.js";
+import { analyzeTurn, countRejected, countToolCalls, renderVerdict, type TurnSample } from "./watchdog.js";
 import type { MeshFrame } from "../protocol/envelope.js";
 import type { SessionContext } from "./pi-types.js";
 
@@ -140,6 +142,56 @@ export default function meshExtension(pi: ExtensionAPI): void {
     };
     const rt = runtime;
 
+    // ---- context watchdog (M1) ---------------------------------------------
+    // Detects degenerate turns (hundreds of rejected duplicate tool calls —
+    // measured incident: 3450 calls, +7.9 MB, latency ×10) and compactions.
+    // Notification + display-only entry: ZERO tokens in the LLM context.
+    let lastSample: TurnSample | null = null;
+    const watchdogCfg = () => ({
+      spikeBytes: config.watchdogSpikeBytes ?? 2_097_152,
+      maxCalls: config.watchdogMaxCalls ?? 64,
+      compactionBytes: config.watchdogCompactionBytes ?? 1_048_576,
+    });
+    const sampleTurn = (message: unknown, toolResults: readonly unknown[]): TurnSample => {
+      let fileBytes: number | null = null;
+      try {
+        const file = ctx.sessionManager?.getSessionFile?.();
+        if (file !== undefined && file !== "") {
+          fileBytes = statSync(file).size;
+        }
+      } catch {
+  // stat is best-effort — analysis still works count-based
+      }
+      return {
+        fileBytes,
+        toolCalls: countToolCalls(message),
+        rejectedCalls: countRejected(toolResults),
+        at: Date.now(),
+      };
+    };
+    const runWatchdog = (message: unknown, toolResults: readonly unknown[]): void => {
+      if (config.watchdog === false) return;
+      try {
+        const sample = sampleTurn(message, toolResults);
+        const verdict = analyzeTurn(sample, lastSample, watchdogCfg());
+        lastSample = sample;
+        if (verdict.type === "ok") return;
+        if (verdict.type === "compaction") {
+          try {
+            rt.onCompactionDetected?.();
+          } catch {
+  // best effort
+          }
+          return; // silent — the resync message is the visible part
+        }
+        const text = renderVerdict(verdict);
+        ctx.ui.notify(text, { level: "warning" });
+        rt.appendEntry?.("mesh-watchdog", { verdict, at: sample.at });
+      } catch {
+  // the watchdog must NEVER break a turn
+      }
+    };
+
     attachClientListeners(pi, rt, getHudRef, ctx, client, saveIdentity);
 
   // Phase 3: announce turn state to the mesh — busy on the first tool
@@ -186,7 +238,9 @@ export default function meshExtension(pi: ExtensionAPI): void {
     // them. Quota/budget limits (FreeUsageLimitError…) are PERMANENT:
     // long hold + blocked; 429/5xx are transient: short hold + rate_limited.
     pi.on("turn_end", (event, _ctx) => {
-      const msg = (event as { message?: { stopReason?: string; errorMessage?: string } }).message;
+      const msg = (event as { message?: { stopReason?: string; errorMessage?: string }; toolResults?: unknown[] }).message;
+      // M1 watchdog runs FIRST — independent of provider-error detection.
+      runWatchdog(msg, (event as { toolResults?: unknown[] }).toolResults ?? []);
       if (msg === undefined || msg.stopReason !== "error") return;
       const state = providerErrorStateFromMessage(msg.errorMessage ?? "");
       if (state === undefined) return;
@@ -286,6 +340,15 @@ export default function meshExtension(pi: ExtensionAPI): void {
     hud = null;
     h?.detach(); // clears BOTH widget and status
     if (rt !== null) {
+  // cancel any pending auto-release timers (mesh_reserve autoReleaseMs)
+      try {
+        if (rt.reserveTimers !== undefined) {
+          for (const t of rt.reserveTimers.values()) clearTimeout(t);
+          rt.reserveTimers.clear();
+        }
+      } catch {
+  // best effort
+      }
   // deliver anything still buffered —: pi.sendMessage may throw
   // while the runtime is shutting down; never break session_shutdown.
       try {

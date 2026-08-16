@@ -66,8 +66,22 @@ export const DEFAULT_INBOUND_BATCH_MS = 250;
 // ---- Activity status ----
 export const DEFAULT_ACTIVITY_IDLE_MS = 120_000; // 2 min without heartbeat/tools
 export const DEFAULT_ACTIVITY_STUCK_MS = 900_000; // 15 min idle WITH reservations
-/** 0 = unlimited: reservations live with the connection). */
-export const DEFAULT_RESERVATION_TTL_MS = 0;
+/** Reservations expire after this long for CONFLICT CHECKS (peer side).
+ *  6 h covers a long-but-legit run (measured: 3 h GPU render runs) with ×2
+ *  margin, while stale claims left behind by a finished agent (measured:
+ *  5 h+ held while idle) stop blocking peers. 0 = unlimited (opt-out). */
+export const DEFAULT_RESERVATION_TTL_MS = 21_600_000; // 6 h
+
+// ---- Context watchdog ----
+/** notify when ONE turn grows the session file by this much (bytes). */
+export const DEFAULT_WATCHDOG_SPIKE_BYTES = 2_097_152; // 2 MiB
+/** notify when ONE assistant message carries more tool calls than this. */
+export const DEFAULT_WATCHDOG_MAX_CALLS = 64;
+/** a session-file drop of this size = compaction (context resync trigger). */
+export const DEFAULT_WATCHDOG_COMPACTION_BYTES = 1_048_576; // 1 MiB
+
+// ---- Inbound context verbosity ----
+export type ContextVerbosity = "compact" | "full";
 
 // ---- Identity defaults ----
 export const ALIAS_RAND_CHARS = 6;
@@ -116,8 +130,18 @@ export interface MeshConfig {
   activityIdleMs: number;
   /** flagged stuck when idle this long AND holding reservations. */
   activityStuckMs: number;
-  /** reservations expire after this long (0 = unlimited, default). */
+  /** reservations expire after this long (0 = unlimited).
+  *  Conflict checks (edit/write blocking) ignore expired peer claims. */
   reservationTtlMs: number;
+  /** context watchdog: notify on abnormal one-turn growth / tool-call
+  *  bursts (rejected duplicate calls after a degenerate generation). */
+  watchdog?: boolean;
+  watchdogSpikeBytes?: number;
+  watchdogMaxCalls?: number;
+  watchdogCompactionBytes?: number;
+  /** "compact" (default): minimal inbound prefix + reply hints on first
+  *  sight only. "full": legacy verbose format (rollback switch). */
+  contextVerbosity?: ContextVerbosity;
   /** broker listen endpoint (broker side). Default: local socket. */
   listen?: string;
   /** broker endpoint the CLIENT connects to (remote or local). */
@@ -154,6 +178,11 @@ export const DEFAULT_CONFIG: MeshConfig = {
   activityIdleMs: DEFAULT_ACTIVITY_IDLE_MS,
   activityStuckMs: DEFAULT_ACTIVITY_STUCK_MS,
   reservationTtlMs: DEFAULT_RESERVATION_TTL_MS,
+  watchdog: true,
+  watchdogSpikeBytes: DEFAULT_WATCHDOG_SPIKE_BYTES,
+  watchdogMaxCalls: DEFAULT_WATCHDOG_MAX_CALLS,
+  watchdogCompactionBytes: DEFAULT_WATCHDOG_COMPACTION_BYTES,
+  contextVerbosity: "compact",
   inboundBatchMs: DEFAULT_INBOUND_BATCH_MS,
   inboundBatchMaxHoldMs: 30_000,
 };
@@ -212,7 +241,26 @@ export function loadConfig(stateDir?: string, env: NodeJS.ProcessEnv = process.e
     ledgerMaxBytes: positiveInt(fileCfg.ledgerMaxBytes, DEFAULT_CONFIG.ledgerMaxBytes),
     activityIdleMs: positiveInt(fileCfg.activityIdleMs, DEFAULT_CONFIG.activityIdleMs),
     activityStuckMs: positiveInt(fileCfg.activityStuckMs, DEFAULT_CONFIG.activityStuckMs),
-    reservationTtlMs: positiveInt(fileCfg.reservationTtlMs, DEFAULT_CONFIG.reservationTtlMs),
+  // reservationTtlMs: 0 is a VALID opt-out (unlimited) — same pattern as
+  // inboundBatchMs (positiveInt alone would coerce an explicit 0 back to
+  // the 6 h default, making the opt-out unreachable).
+  reservationTtlMs: fileCfg.reservationTtlMs === 0
+    ? 0
+    : positiveInt(fileCfg.reservationTtlMs, DEFAULT_CONFIG.reservationTtlMs),
+  watchdog: fileCfg.watchdog === false ? false : true,
+  watchdogSpikeBytes: positiveInt(
+    fileCfg.watchdogSpikeBytes ?? DEFAULT_CONFIG.watchdogSpikeBytes,
+    DEFAULT_CONFIG.watchdogSpikeBytes ?? DEFAULT_WATCHDOG_SPIKE_BYTES,
+  ),
+  watchdogMaxCalls: positiveInt(
+    fileCfg.watchdogMaxCalls ?? DEFAULT_CONFIG.watchdogMaxCalls,
+    DEFAULT_CONFIG.watchdogMaxCalls ?? DEFAULT_WATCHDOG_MAX_CALLS,
+  ),
+  watchdogCompactionBytes: positiveInt(
+    fileCfg.watchdogCompactionBytes ?? DEFAULT_CONFIG.watchdogCompactionBytes,
+    DEFAULT_CONFIG.watchdogCompactionBytes ?? DEFAULT_WATCHDOG_COMPACTION_BYTES,
+  ),
+  contextVerbosity: fileCfg.contextVerbosity === "full" ? "full" : "compact",
     inboundBatchMs: fileCfg.inboundBatchMs === 0
       ? 0
       : positiveInt(fileCfg.inboundBatchMs ?? DEFAULT_INBOUND_BATCH_MS, DEFAULT_INBOUND_BATCH_MS),
@@ -265,6 +313,10 @@ export function loadConfig(stateDir?: string, env: NodeJS.ProcessEnv = process.e
   if (envStuck !== undefined) cfg.activityStuckMs = envStuck;
   const envResTtl = envInt(env, "MESH_RESERVATION_TTL_MS");
   if (envResTtl !== undefined) cfg.reservationTtlMs = envResTtl;
+  // MESH_RESERVATION_TTL_MS=0 = explicit opt-out (unlimited)
+  if (env.MESH_RESERVATION_TTL_MS === "0") cfg.reservationTtlMs = 0;
+  if (env.MESH_WATCHDOG === "0" || env.MESH_WATCHDOG === "false") cfg.watchdog = false;
+  if (env.MESH_CONTEXT_VERBOSE === "1" || env.MESH_CONTEXT_VERBOSE === "true") cfg.contextVerbosity = "full";
   if (env.MESH_INBOUND_BATCH_MS !== undefined) {
     const n = Number(env.MESH_INBOUND_BATCH_MS);
     cfg.inboundBatchMs = Number.isFinite(n) && n >= 0 ? Math.floor(n) : cfg.inboundBatchMs;

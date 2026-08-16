@@ -16,14 +16,34 @@ export interface InjectedInbound {
   aborted: boolean;
 }
 
-/** content format: `[mesh] @from (room X, priority, HH:MM:SS) body` —
- *  M4: the local arrival time is part of the prefix so bursts are
- *  chronological at a glance. */
-export function formatInboundContent(frame: MeshFrame, opts: { replyChain?: boolean } = {}): string {
+/** Options for the inbound content format.
+ *  - verbose: legacy full format (config contextVerbosity:"full")
+ *  - showReplyHint: gate the "↩ reply with mesh_reply …" line (ReplyHintTracker)
+ *  - homeRoom: the session's primary room — compact mode omits the room tag
+ *    when the frame comes from it. */
+export interface FormatOpts {
+  replyChain?: boolean;
+  verbose?: boolean;
+  showReplyHint?: boolean;
+  homeRoom?: string;
+}
+
+/** content format:
+ *  VERBOSE (legacy / contextVerbosity "full"):
+ *    `[mesh] @from (room X, priority, HH:MM:SS) body` + full hint line.
+ *  COMPACT (v0.5 default): `[mesh] @from [room] prio HH:MM:SS body (m_id)`
+ *    — room shown only when ≠ homeRoom, priority only when ≠ normal,
+ *    hint line only when the ReplyHintTracker asks for it. The short
+ *    `(m_id)` suffix is ALWAYS present: mesh_reply correlation never
+ *    depends on the hint line. */
+export function formatInboundContent(frame: MeshFrame, opts: FormatOpts = {}): string {
   const room = frame.room ?? "default";
   const priority = frame.priority ?? "normal";
   const fan = frame.broadcast === true ? ", broadcast" : frame.replyAll === true ? ", reply-all" : "";
   const time = localTime(frame.ts);
+  if (opts.verbose !== true) {
+    return formatCompact(frame, opts, { room, priority, time });
+  }
   const prefix = `[mesh] @${frame.from ?? "?"} (room ${room}, ${priority}${fan}, ${time})`;
   if (frame.type === "remind") {
     const replyTo = frame.replyTo ?? frame.id;
@@ -60,6 +80,60 @@ export function formatInboundContent(frame: MeshFrame, opts: { replyChain?: bool
     (frame.broadcast === true
       ? ` (broadcast to ${frame.totalCount ?? "?"} members — use replyAll to answer the room, or reply to just @${frame.from ?? "?"})`
       : "")
+  );
+}
+
+/** Compact format (v0.5 default). Short tags, gated hint, msgId suffix. */
+function formatCompact(
+  frame: MeshFrame,
+  opts: FormatOpts,
+  meta: { room: string; priority: string; time: string },
+): string {
+  const roomTag = meta.room !== (opts.homeRoom ?? "default") ? ` [${meta.room}]` : "";
+  const prioTag = meta.priority !== "normal" ? ` ${meta.priority}` : "";
+  const id = frame.id ?? "?";
+  const showHint = opts.showReplyHint !== false; // default: teach
+  if (frame.type === "remind") {
+  // rare + critical: keep the full instruction — no suffix games
+    const replyTo = frame.replyTo ?? id;
+    return (
+      `[mesh] @${frame.from ?? "?"}${roomTag}${prioTag} ${meta.time} reminder: reply due for ${replyTo} — ` +
+      `reply with mesh_reply using msgId "${replyTo}" ` +
+      `(IGNORE if you ALREADY replied to it)`
+    );
+  }
+  if (frame.type === "reply") {
+    const chain = opts.replyChain === true;
+    const head =
+      `[mesh] @${frame.from ?? "?"}${roomTag}${prioTag} ${meta.time} ` +
+      `reply to ${frame.replyTo ?? "?"}: ${frame.body ?? ""} (${id})`;
+    if (chain) {
+      return (
+        head +
+        `\n↩ INFO ONLY (reply to a reply): react only if useful — via mesh_send, not mesh_reply`
+      );
+    }
+    return (
+      head +
+      (showHint ? `\n↩ answer with the mesh_reply tool using msgId "${id}"` : "") +
+      (frame.replyAll === true ? " (went to the whole room)" : "")
+    );
+  }
+  const replyTargets =
+    frame.replyTargets !== undefined && frame.replyTargets.length > 0
+      ? ` (reply→@${frame.replyTargets.join(", @")})`
+      : "";
+  const bcast =
+    frame.broadcast === true
+      ? ` (broadcast→${frame.totalCount ?? "?"}, replyAll answers the room)`
+      : "";
+  const head =
+    `[mesh] @${frame.from ?? "?"}${roomTag}${prioTag} ${meta.time} ${frame.body ?? ""} (${id})`;
+  return (
+    head +
+    replyTargets +
+    bcast +
+    (showHint ? `\n↩ reply with the mesh_reply tool using msgId "${id}"` : "")
   );
 }
 
@@ -102,10 +176,10 @@ export function mapReplyDelivery(frame: MeshFrame): DeliverAs {
 export const FORCE_IDLE_POLL_MS = 50;
 export const FORCE_IDLE_MAX_MS = 3_000;
 
-function buildInboundMessage(frame: MeshFrame, replyChain = false): InboundMessage {
+function buildInboundMessage(frame: MeshFrame, opts: FormatOpts = {}): InboundMessage {
   return {
     customType: "mesh-inbound",
-    content: formatInboundContent(frame, { replyChain }),
+    content: formatInboundContent(frame, opts),
     display: true,
     details: inboundDetails(frame),
   };
@@ -122,11 +196,11 @@ export function deliverWhenIdle(
   pi: Pick<ExtensionAPI, "sendMessage">,
   ctx: SessionContext,
   frame: MeshFrame,
-  replyChain = false,
+  opts: FormatOpts = {},
   pollMs: number = FORCE_IDLE_POLL_MS,
   maxMs: number = FORCE_IDLE_MAX_MS,
 ): void {
-  const message = buildInboundMessage(frame, replyChain);
+  const message = buildInboundMessage(frame, opts);
   const deadline = Date.now() + maxMs;
   let sent = false;
   const trySend = (): void => {
@@ -151,13 +225,12 @@ export function injectInbound(
   pi: Pick<ExtensionAPI, "sendMessage">,
   ctx: SessionContext | null,
   frame: MeshFrame,
-  opts: { replyChain?: boolean } = {},
+  opts: FormatOpts = {},
 ): InjectedInbound {
   const priority: MeshPriority = frame.priority ?? "normal";
-  const replyChain = opts.replyChain === true;
   // a reply-à-reply is INFO ONLY — followUp (no interruption) and the
   // labelled content lets the LLM decide whether to react.
-  const deliverAs = frame.type === "reply" && replyChain
+  const deliverAs = frame.type === "reply" && opts.replyChain === true
     ? "followUp"
     : frame.type === "remind"
       ? "followUp"
@@ -176,11 +249,11 @@ export function injectInbound(
   // Defer the send until the aborted run settles: the host may purge its
   // steer queue on abort, so queueing now risks losing the message (the
   // exact bug that made 'force' unreliable during long tool calls).
-    deliverWhenIdle(pi, ctx, frame, replyChain);
-    return { message: buildInboundMessage(frame, replyChain), deliverAs: "steer", aborted };
+    deliverWhenIdle(pi, ctx, frame, opts);
+    return { message: buildInboundMessage(frame, opts), deliverAs: "steer", aborted };
   }
-  pi.sendMessage(buildInboundMessage(frame, replyChain), { triggerTurn: true, deliverAs });
-  return { message: buildInboundMessage(frame, replyChain), deliverAs, aborted };
+  pi.sendMessage(buildInboundMessage(frame, opts), { triggerTurn: true, deliverAs });
+  return { message: buildInboundMessage(frame, opts), deliverAs, aborted };
 }
 
 // ---------------------------------------------------------------------------
@@ -208,6 +281,8 @@ export interface InboundDeps {
   read?: (msgId: string, from: string) => void;
   /** tag a reply whose target is itself a reply (info-only delivery). */
   isReplyToReply?: (replyTo: string) => boolean;
+  /** format options (verbosity/hints) threaded to injectInbound. */
+  format?: FormatOpts;
 }
 
 /**
@@ -231,6 +306,7 @@ export function handleInboundFrame(
   try {
     handleInboundSideEffects(frame, deps);
     injectInbound(pi, ctx, frame, {
+      ...(deps.format ?? {}),
       replyChain: (frame as unknown as { __replyChain?: boolean }).__replyChain === true,
     });
   } catch {

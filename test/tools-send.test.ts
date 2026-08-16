@@ -21,6 +21,10 @@ function makeRuntime(stateDir: string, sendResult: SendResult, rooms: string[] =
       isOnline: () => true,
       send: () => Promise.resolve(sendResult),
       connect: () => Promise.reject(new Error("must not connect in these tests")),
+      // M1 send-guard surface
+      knowsPeer: () => true,
+      knownPeerList: ["bob"],
+      busyForMs: () => undefined,
     },
     ledger,
     transcript: { isEnabled: () => false, record: () => {} },

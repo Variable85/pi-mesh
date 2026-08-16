@@ -4,15 +4,52 @@
 import { readFileSync } from "node:fs";
 import type { WelcomeInfo } from "../client/client.js";
 import type { MeshFrame } from "../protocol/envelope.js";
-import { InboundBatcher, batchDetails, buildBatchMessage, buildSingleMessage, bypassesBatch } from "./batcher.js";
+import { buildBatchMessage, bypassesBatch, batchDetails, InboundBatcher } from "./batcher.js";
 import type { MeshHud } from "./hud.js";
-import { handleInboundSideEffects, injectInbound } from "./inbound.js";
+import { handleInboundSideEffects, injectInbound, type FormatOpts } from "./inbound.js";
+import { ReplyHintTracker } from "./reply-hints.js";
 import type { ExtensionAPI, InboundMessage, SessionContext } from "./pi-types.js";
 import type { MeshRuntime } from "./tools.js";
 
 /** live-entry previews shown while the agent is busy (cooldown). */
 const LIVE_COOLDOWN_MS = 1_500;
 const liveCooldowns = new Map<string, number>();
+
+/** One full mesh-context block per session — reconnects send a SHORT diff
+ *  (measured: cs-master received the ~500-token block 5× — pure duplication).
+ *  A compaction resets the flag: the block is re-sent exactly when the
+ *  context lost it. */
+let fullContextSent = false;
+let lastPeersOnline: Set<string> = new Set();
+/** Hint tracker — shared per session (compaction resets re-teach). */
+const hintTracker = new ReplyHintTracker();
+
+/** Format opts for one inbound frame (compact mode + gated hints). */
+export function formatOptsFor(
+  frame: MeshFrame,
+  verbose: boolean,
+  homeRoom: string,
+  hints: ReplyHintTracker = hintTracker,
+): FormatOpts {
+  return {
+    verbose,
+    homeRoom,
+    showReplyHint: hints.shouldShow(frame.from),
+  };
+}
+
+/** Compact reconnect diff line (~30 tokens vs ~500 for the full block). */
+export function buildReconnectDiff(prev: readonly string[], next: readonly string[]): string {
+  const before = new Set(prev);
+  const after = new Set(next);
+  const joined = [...after].filter((a) => !before.has(a));
+  const left = [...before].filter((b) => !after.has(b));
+  const parts: string[] = [];
+  if (joined.length > 0) parts.push(`+${joined.map((a) => `@${a}`).join(", ")}`);
+  if (left.length > 0) parts.push(`−${left.map((a) => `@${a}`).join(", ")}`);
+  const chg = parts.length > 0 ? ` Peers: ${parts.join(" · ")}.` : " No peer changes.";
+  return `[mesh] reconnected${chg} Rooms: ${after.size > 0 ? "online" : "none"} — full status: mesh_status.`;
+}
 
 /** session name keeps the first user message after the mesh identity. */
 const SESSION_NAME_MSG_MAX = 80;
@@ -105,7 +142,9 @@ export function attachClientListeners(
     client.inboundBatchMaxHoldMs,
     () => rt.ctx?.isIdle?.() === false, // busy = a turn is running (e.g. sleep)
     (frames: MeshFrame[]) => {
-    const batch = buildBatchMessage(frames);
+    const batch = buildBatchMessage(frames, (f) =>
+      formatOptsFor(f, client.contextVerbosity === "full", client.homeRoom),
+    );
     pi.sendMessage(
       {
         customType: "mesh-inbound",
@@ -124,9 +163,13 @@ export function attachClientListeners(
   const deliver = (frame: MeshFrame): void => {
     handleInboundSideEffects(frame, deps);
     getHud()?.noteInbound(frame); // preview: transient memory only, never persisted
+    const opts: FormatOpts = {
+      ...formatOptsFor(frame, client.contextVerbosity === "full", client.homeRoom),
+    };
     if (bypassesBatch(frame) || client.inboundBatchMs <= 0) {
       batcher.flushNow(); // deliver any pending batch first (ordering)
       injectInbound(pi, rt.ctx, frame, {
+        ...opts,
         replyChain: (frame as unknown as { __replyChain?: boolean }).__replyChain === true,
       });
       return;
@@ -196,6 +239,32 @@ export function attachClientListeners(
   // the UI; triggerTurn:false avoids an extra turn. The context keeps the
   // FULL picture: peers sharing a room are listed first, the other
   // sessions (with their rooms) after — the agent must know who is where.
+  //
+  // M2: the FULL block goes out ONCE per session; reconnects (and
+  // renames) send a one-line diff instead — measured in cs-room: the
+  // master received the ~500-token block 5×, pure context duplication.
+    const othersNow = welcome.peers.filter((p) => p.alias !== client.alias).map((p) => p.alias);
+    if (fullContextSent) {
+      pi.sendMessage(
+        {
+          customType: "mesh-context",
+          content: buildReconnectDiff([...lastPeersOnline], othersNow),
+          display: false,
+        },
+        { triggerTurn: false },
+      );
+      lastPeersOnline = new Set(othersNow);
+      return;
+    }
+    fullContextSent = true;
+    lastPeersOnline = new Set(othersNow);
+  // watchdog hook: a compaction wipes the context — re-teach everything
+  // (full block + reply hints) exactly when it was lost.
+    rt.onCompactionDetected = () => {
+      fullContextSent = false;
+      hintTracker.reset();
+      client.sendActivity("idle"); // harmless; keeps presence fresh
+    };
     const roomList = (welcome.rooms.length > 0 ? welcome.rooms.join(",") : "default");
     const myRooms = new Set(roomList.split(","));
     const others = welcome.peers.filter((p) => p.alias !== client.alias);

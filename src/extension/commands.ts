@@ -22,6 +22,7 @@ const HELP_TEXT = [
   "                         default rooms, no reservations) WITHOUT leaving this session",
   "/mesh log [on|off]    — opt-in transcript (redacted bodies)",
   "/mesh ping <alias>    — send a one-shot ping message",
+  "/mesh stale           — reservations held by peers, with age (TTL insight)",
   "/mesh broker          — socket path, lock pid, session state",
   "/mesh help",
 ].join("\n");
@@ -291,6 +292,50 @@ async function cmdPing(rt: MeshRuntime, ctx: SessionContext, alias: string | und
   }
 }
 
+/** `/mesh stale` — pure report builder: every reservation currently
+ *  blocking peers, with its age vs the TTL (measured: 10 leaked claims,
+ *  some blocking edits for 5+ h). Exported for tests. */
+export function buildStaleReport(
+  reservationsByPeer: ReadonlyMap<string, readonly { pattern: string; reason?: string; since?: string }[]>,
+  selfAlias: string,
+  ttlMs: number,
+  activityOf: (alias: string) => { state: string } | undefined,
+  now: number = Date.now(),
+): string[] {
+  const rows: string[] = [];
+  for (const [alias, reservations] of reservationsByPeer) {
+    if (alias === selfAlias) continue;
+    for (const r of reservations) {
+      const t = r.since !== undefined ? Date.parse(r.since) : Number.NaN;
+      const ageH = Number.isNaN(t) ? "?" : `${((now - t) / 3_600_000).toFixed(1)}h`;
+      const expired =
+        ttlMs > 0 && !Number.isNaN(t) && now - t > ttlMs ? " (EXPIRED — ignorable)" : "";
+      const act = activityOf(alias);
+      const state = act === undefined ? "" : act.state === "busy" ? " · busy" : ` · ${act.state}`;
+      rows.push(`  @${alias} · ${r.pattern} · held ${ageH}${state}${expired}`);
+    }
+  }
+  return rows;
+}
+
+function cmdStale(rt: MeshRuntime, ctx: SessionContext): void {
+  const rows = buildStaleReport(
+    rt.client.peerReservationMap,
+    rt.client.alias,
+    rt.client.reservationTtlMs,
+    (a) => rt.client.activityOf(a),
+  );
+  if (rows.length === 0) {
+    notify(ctx, "mesh: no peer reservations (nothing stale)");
+    return;
+  }
+  const ttlMs = rt.client.reservationTtlMs;
+  notify(
+    ctx,
+    `mesh reservations held by peers (TTL ${ttlMs > 0 ? `${(ttlMs / 3_600_000).toFixed(0)} h` : "off"}):\n${rows.join("\n")}`,
+  );
+}
+
 /** Phase 3: session file size + compaction count (context pressure hint). */
 function sessionHealth(rt: MeshRuntime): { sizeMb: number; compactions: number; path: string } | null {
   const file = rt.ctx?.sessionManager?.getSessionFile?.();
@@ -399,6 +444,9 @@ export function registerCommands(
           break;
         case "ping":
           await cmdPing(rt, ctx, rest[0]);
+          break;
+        case "stale":
+          cmdStale(rt, ctx);
           break;
         case "broker":
           cmdBroker(rt, ctx);

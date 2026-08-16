@@ -9,10 +9,10 @@ import { buildFrame, type MeshFrame } from "../src/protocol/envelope.js";
 const msgFrame = (): MeshFrame =>
   buildFrame({ type: "msg", from: "alice", to: "bob", room: "default", body: "hello" });
 
-describe("formatInboundContent: first line stays byte-identical (§9.1)", () => {
+describe("formatInboundContent: verbose format (contextVerbosity full)", () => {
   it("msg frame first line is exactly `[mesh] @from (room X, priority) body`", () => {
     const f = msgFrame();
-    const firstLine = formatInboundContent(f).split("\n")[0];
+    const firstLine = formatInboundContent(f, { verbose: true }).split("\n")[0];
     assert.equal(firstLine, `[mesh] @alice (room default, normal, ${localTime(f.ts)}) hello`);
   });
 
@@ -25,8 +25,41 @@ describe("formatInboundContent: first line stays byte-identical (§9.1)", () => 
       priority: "urgent",
       body: "queued",
     });
-    const firstLine = formatInboundContent(f).split("\n")[0];
+    const firstLine = formatInboundContent(f, { verbose: true }).split("\n")[0];
     assert.equal(firstLine, `[mesh] @alice (room ops, urgent, ${localTime(f.ts)}) queued`);
+  });
+});
+
+describe("formatInboundContent: compact default (v0.5)", () => {
+  it("msg frame: `[mesh] @from HH:MM:SS body (m_id)` — room omitted at home, hint present by default", () => {
+    const f = msgFrame();
+    const firstLine = formatInboundContent(f).split("\n")[0];
+    assert.equal(firstLine, `[mesh] @alice ${localTime(f.ts)} hello (${f.id})`);
+    const content = formatInboundContent(f);
+    assert.ok(content.includes(`↩ reply with the mesh_reply tool using msgId "${f.id}"`));
+  });
+
+  it("foreign room + urgent priority are tagged; hint can be gated off", () => {
+    const f = buildFrame({
+      type: "msg",
+      from: "alice",
+      to: "bob",
+      room: "ops",
+      priority: "urgent",
+      body: "run",
+    });
+    const firstLine = formatInboundContent(f, { homeRoom: "default" }).split("\n")[0] ?? "";
+    assert.ok(firstLine.startsWith(`[mesh] @alice [ops] urgent ${localTime(f.ts)} run (`), firstLine);
+    const noHint = formatInboundContent(f, { showReplyHint: false });
+    assert.ok(!noHint.includes("↩ reply"));
+    assert.ok(noHint.includes(`(${f.id})`), "msgId suffix ALWAYS present");
+  });
+
+  it("same room as home → no room tag", () => {
+    const f = buildFrame({ type: "msg", from: "a", to: "b", room: "cs-room", body: "x" });
+    const firstLine = formatInboundContent(f, { homeRoom: "cs-room" }).split("\n")[0] ?? "";
+    assert.ok(firstLine.startsWith(`[mesh] @a ${localTime(f.ts)} x (`), firstLine);
+    assert.ok(!firstLine.includes("[cs-room]"));
   });
 });
 
@@ -58,7 +91,7 @@ describe("formatInboundContent: mesh_reply instruction line", () => {
 describe("formatInboundContent: remind frames carry the replyTo instruction", () => {
   it("remind uses frame.replyTo in the instruction when present", () => {
     const f = buildFrame({ type: "remind", from: "broker", to: "bob", replyTo: "msg-123" });
-    const content = formatInboundContent(f);
+    const content = formatInboundContent(f, { verbose: true });
     assert.equal(
       content,
       `[mesh] @broker (room default, normal, ${localTime(f.ts)}) reminder: reply due for msg-123` +
@@ -72,11 +105,14 @@ describe("formatInboundContent: remind frames carry the replyTo instruction", ()
     // enforce replyTo; validation is a separate step).
     const f = buildFrame({ type: "remind", from: "broker", to: "bob" });
     assert.equal(f.replyTo, undefined);
-    const content = formatInboundContent(f);
+    const verbose = formatInboundContent(f, { verbose: true });
     assert.ok(
-      content.includes(`reply due for ${f.id} — reply with the mesh_reply tool using msgId "${f.id}"`),
-      `remind must fall back to frame.id, got: ${content}`,
+      verbose.includes(`reply due for ${f.id} — reply with the mesh_reply tool using msgId "${f.id}"`),
+      `remind must fall back to frame.id, got: ${verbose}`,
     );
+    const compact = formatInboundContent(f);
+    assert.ok(compact.includes(`reply due for ${f.id}`), compact);
+    assert.ok(compact.includes(`msgId "${f.id}"`), compact);
   });
 });
 
@@ -90,7 +126,7 @@ describe("formatInboundContent: orphan replies (the cs-room fix)", () => {
       replyTo: "m_orig_12345678",
       body: "MISSION COMPLETE",
     });
-    const content = formatInboundContent(f);
+    const content = formatInboundContent(f, { verbose: true });
     assert.ok(
       content.startsWith(`[mesh] @bob (room cs-room, normal, ${localTime(f.ts)}) reply to m_orig_12345678: MISSION COMPLETE`),
       `got: ${content}`,
@@ -99,6 +135,19 @@ describe("formatInboundContent: orphan replies (the cs-room fix)", () => {
       content.includes(`answer back with the mesh_reply tool using msgId "${f.id}"`),
       `got: ${content}`,
     );
+  });
+
+  it("compact reply keeps the msgId suffix even without the hint line", () => {
+    const f = buildFrame({
+      type: "reply",
+      from: "bob",
+      to: "alice",
+      replyTo: "m_orig_12345678",
+      body: "DONE",
+    });
+    const content = formatInboundContent(f, { showReplyHint: false });
+    assert.ok(content.includes(`(${f.id})`), "compact reply MUST keep the msgId suffix");
+    assert.ok(!content.includes("↩"));
   });
 });
 
@@ -114,7 +163,8 @@ describe("reply-to-reply info-only format (D39)", () => {
     });
     const content = formatInboundContent(chain, { replyChain: true });
     assert.ok(content.includes("INFO ONLY"), content);
-    assert.ok(content.includes("NEVER an acknowledgment"), content);
+    assert.ok(content.includes("via mesh_send"), content);
+    assert.ok(content.includes(`(${chain.id})`), `chain reply keeps its msgId suffix: ${content}`);
 
     const mission = buildFrame({
       type: "reply",
@@ -124,8 +174,8 @@ describe("reply-to-reply info-only format (D39)", () => {
       replyTo: "m_mission_1234567", // targets a mission → normal
       body: "MISSION TERMINÉE",
     });
-    const normal = formatInboundContent(mission, { replyChain: false });
-    assert.ok(normal.includes("answer back with the mesh_reply tool"), normal);
+    const normal = formatInboundContent(mission, { replyChain: false, showReplyHint: true });
+    assert.ok(normal.includes("answer with the mesh_reply tool"), normal);
     assert.ok(!normal.includes("INFO ONLY"), normal);
   });
 });

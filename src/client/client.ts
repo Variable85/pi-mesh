@@ -256,6 +256,9 @@ export class MeshClient extends EventEmitter {
   private readonly peerReservations = new Map<string, FileReservation[]>();
   /** Latest announced turn state per peer (activity frames). */
   private readonly peerActivity = new Map<string, { state: "busy" | "idle" | "rate_limited" | "blocked"; at: string }>();
+  /** Aliases seen online (welcome + presence join) — send-guard hints.
+  *  Best-effort: a missing entry is a WARNING, never a block. */
+  private readonly knownPeers = new Set<string>();
   /**
   * replyTo msgIds already answered/handled: the FIRST reply to a given
   * message is consumed (pending match) or injected (orphan); later replies
@@ -483,6 +486,36 @@ export class MeshClient extends EventEmitter {
   /** Last known turn state of a peer (from snapshots/activity frames). */
   activityOf(alias: string): { state: "busy" | "idle" | "rate_limited" | "blocked"; at: string } | undefined {
     return this.peerActivity.get(alias);
+  }
+
+  /** How long a peer has been BUSY (ms), or undefined when not busy/unknown.
+  *  Used to warn awaitReply senders: a busy-since-long peer with a short
+  *  timeout will expire (measured: 6/6 expired missions in cs-room). */
+  busyForMs(alias: string, now: number = Date.now()): number | undefined {
+    const a = this.peerActivity.get(alias);
+    if (a === undefined || a.state !== "busy") return undefined;
+    const t = Date.parse(a.at);
+    if (Number.isNaN(t)) return undefined;
+    return Math.max(0, now - t);
+  }
+
+  /** Aliases known online (welcome/presence cache) — best-effort hints. */
+  knowsPeer(alias: string): boolean {
+    return this.knownPeers.has(alias);
+  }
+
+  get knownPeerList(): readonly string[] {
+    return [...this.knownPeers];
+  }
+
+  /** inbound context verbosity ("compact" | "full"). */
+  get contextVerbosity(): "compact" | "full" {
+    return this.config.contextVerbosity === "full" ? "full" : "compact";
+  }
+
+  /** the session's home room: the room tag is omitted for its frames. */
+  get homeRoom(): string {
+    return this.joinedRooms.size > 0 ? [...this.joinedRooms][0] ?? "default" : "default";
   }
 
   /** send a read receipt for an inbound msgId back to its sender. */
@@ -741,6 +774,11 @@ export class MeshClient extends EventEmitter {
                   this.peerActivity.set(p.alias, p.activity);
                 }
               }
+  // send-guard cache: aliases present in the welcome are known online
+              this.knownPeers.clear();
+              for (const p of frame.peers ?? []) {
+                if (p.alias !== undefined && p.alias !== this.alias) this.knownPeers.add(p.alias);
+              }
               resolve({
                 alias: this.alias,
                 rooms: frame.rooms ?? [...this.joinedRooms],
@@ -913,6 +951,9 @@ export class MeshClient extends EventEmitter {
         if (frame.status === "offline") {
           this.peerReservations.delete(frame.from ?? "");
           this.peerActivity.delete(frame.from ?? ""); // gone — forget its state
+          this.knownPeers.delete(frame.from ?? "");
+        } else if (frame.status === "online" && frame.from !== undefined) {
+          this.knownPeers.add(frame.from); // joined — the send guard knows it
         }
         this.emit("presence", frame);
         break;

@@ -129,7 +129,7 @@ describe("reply delivery mode (D25)", () => {
       replyTo: "m_orig_12345678",
       ts: "2026-08-10T00:00:00.000Z",
     };
-    const content = formatInboundContent(f as unknown as MeshFrame);
+    const content = formatInboundContent(f as unknown as MeshFrame, { verbose: true });
     assert.ok(content.includes("IGNORE this reminder if you ALREADY replied"), content);
   });
 });

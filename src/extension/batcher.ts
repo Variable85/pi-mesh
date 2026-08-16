@@ -3,7 +3,7 @@
 // N replies queue up; injecting them one-by-one forces N turns and N LLM
 // calls. A batch is one turn: the agent sees the whole lot and answers once.
 import type { MeshFrame, MeshPriority } from "../protocol/envelope.js";
-import { formatInboundContent, inboundDetails } from "./inbound.js";
+import { formatInboundContent, inboundDetails, type FormatOpts } from "./inbound.js";
 import type { DeliverAs, InboundMessage } from "./pi-types.js";
 
 export interface BatchedInjection {
@@ -15,6 +15,9 @@ export interface BatchedInjection {
 export const BATCH_MAX_MESSAGES = 12;
 export const BATCH_MAX_BODY_CHARS = 240;
 
+/** Per-frame format opts builder — defaults keep the legacy behaviour. */
+type FormatFor = (frame: MeshFrame) => FormatOpts;
+
 function priorityRank(p: MeshPriority): number {
   return p === "force" ? 3 : p === "urgent" ? 2 : 1;
 }
@@ -25,12 +28,14 @@ function priorityRank(p: MeshPriority): number {
  * followUp); force frames NEVER go through the batcher (they have their own
  * abort path).
  */
-export function buildBatchMessage(frames: MeshFrame[]): BatchedInjection {
+export function buildBatchMessage(frames: MeshFrame[], formatFor: FormatFor = () => ({})): BatchedInjection {
   const shown = frames.slice(0, BATCH_MAX_MESSAGES);
   const overflow = frames.length - shown.length;
   const parts: string[] = [`[mesh batch — ${frames.length} message${frames.length > 1 ? "s" : ""}]`];
   shown.forEach((f, i) => {
+    const opts = formatFor(f);
     const body = formatInboundContent(f, {
+      ...opts,
       replyChain: (f as unknown as { __replyChain?: boolean }).__replyChain === true,
     });
     parts.push(`${i + 1}) ${body}`);
@@ -60,10 +65,11 @@ export function bypassesBatch(frame: MeshFrame): boolean {
 }
 
 /** Build a single (non-batched) inbound message — used when batchMs = 0. */
-export function buildSingleMessage(frame: MeshFrame): InboundMessage {
+export function buildSingleMessage(frame: MeshFrame, formatFor: FormatFor = () => ({})): InboundMessage {
   return {
     customType: "mesh-inbound",
     content: formatInboundContent(frame, {
+      ...formatFor(frame),
       replyChain: (frame as unknown as { __replyChain?: boolean }).__replyChain === true,
     }),
     display: true,

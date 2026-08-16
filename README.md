@@ -102,9 +102,11 @@ mesh_send { "to": "agent-d4e5f6", "message": "hello from A" }
 # → "delivered m_lxyz_ab12cd34"
 ```
 
-Session 2 receives `[mesh] @agent-a1b2c3 (room default, normal, 14:32:05)
-hello from A` as a follow-up turn and answers with
+Session 2 receives `[mesh] @agent-a1b2c3 14:32:05 hello from A (m_lxyz_ab12cd34)`
+as a follow-up turn and answers with
 `mesh_reply { "msgId": "m_lxyz_ab12cd34", "message": "hi A" }`.
+(The short format is the v0.5 default — `contextVerbosity: "full"` restores
+the legacy `[mesh] @from (room X, priority, HH:MM:SS) body` prefix.)
 
 The broker **auto-spawns** on first use (lockfile in `$TMPDIR/mesh-<uid>/`).
 No daemon management needed. Try `npm run smoke` for a full headless demo
@@ -114,13 +116,13 @@ No daemon management needed. Try `npm run smoke` for a full headless demo
 
 | tool | params | returns (honest one-liner + `details`) |
 |---|---|---|
-| `mesh_send` | `to?`, `message`, `room?`, `broadcast?`, `priority?`, `reason?`, `awaitReply?`, `block?`, `timeoutMs?`, `refs?`, `replyTo?` | `delivered` / `queued_offline` / `reply: …` / `expired` / `blocked: …` |
+| `mesh_send` | `to?`, `message`, `room?`, `broadcast?`, `priority?`, `reason?`, `awaitReply?`, `block?`, `timeoutMs?`, `refs?`, `replyTo?` | `delivered` / `queued_offline` / `reply: …` / `expired` / `blocked: …` — impossible targets (`"*"`, `"<room>-broadcast"`) refused **locally**; unseen aliases get a soft warning; `awaitReply` toward a peer busy longer than the timeout gets a burst-pattern advisory |
 | `mesh_reply` | `msgId`, `message`, `replyAll?`, `to?`, `refs?` | `delivered` or `blocked: reply_without_target` |
 | `mesh_wait_all` | `timeoutMs?` | block the turn until every awaited mission is answered (or timeout) — group verdict: who answered (with the answer), who is missing |
 | `mesh_status` | `room?`, `all?` | live broker snapshot — peers sharing a room, per-peer version (`⚠` on skew), turn state (`● working / ○ idle / ✕ stuck`), `likely done` summary, read receipts, missions, broker counters |
 | `mesh_ledger` | `limit?`, `from?`, `to?`, `room?`, `event?` | durable **hash-only** history — bodies never stored, survives restarts |
 | `mesh_history` | `limit?`, `withBodies?` | local **memory ring** (debug — never the ledger) |
-| `mesh_reserve` | `paths`, `reason?` | reserve files/dirs — peers' `edit`/`write` get blocked on them |
+| `mesh_reserve` | `paths`, `reason?`, `autoReleaseMs?` | reserve files/dirs — peers' `edit`/`write` get blocked on them; claims expire for conflict checks after `reservationTtlMs` (default 6 h, re-reserve to renew) and can self-release (`autoReleaseMs`) |
 | `mesh_release` | `paths?` (omit = all) | release reservations, peers notified immediately |
 
 **The orchestrator pattern** (injected in every session's identity context
@@ -168,9 +170,32 @@ node dist/src/cli/mesh.js doctor               # socket? lock stale? pid? protoc
 ```jsonc
 { "alias": "alice", "rooms": ["default"], "transcript": false,
   "mailboxCap": 100, "mailboxTtlMs": 3600000, "ledgerMaxBytes": 5242880,
-  "activityIdleMs": 120000, "activityStuckMs": 900000, "reservationTtlMs": 0,
+  "activityIdleMs": 120000, "activityStuckMs": 900000,
+  "reservationTtlMs": 21600000,
+  "watchdog": true, "watchdogSpikeBytes": 2097152, "watchdogMaxCalls": 64,
+  "contextVerbosity": "compact",
   "inboundBatchMs": 250, "inboundBatchMaxHoldMs": 30000 }
 ```
+
+v0.5 highlights:
+
+- **Context watchdog** — notifies when ONE turn grows the session file by
+  >2 MB or carries >64 tool calls (degenerate generation; measured incident:
+  3450 duplicate calls, +7.9 MB, ×10 turn latency). A ≥1 MB file **drop** is
+  detected as a compaction and triggers a mesh-context resync. Opt out:
+  `"watchdog": false` or `MESH_WATCHDOG=0`.
+- **Compact inbound context** — `[mesh] @from HH:MM:SS body (m_id)` by
+  default; the full `↩ reply …` instruction shows on first sight per sender,
+  every 20 messages and after 30-min silences (survives `/compact`). The
+  legacy format: `"contextVerbosity": "full"` / `MESH_CONTEXT_VERBOSE=1`.
+- **Reconnect diff** — the ~500-token identity block is sent once per
+  session; reconnects inject a one-line peer diff instead.
+- **Reservation TTL 6 h** (was unlimited) — stale claims stop blocking
+  peers; long runs re-reserve to renew or use `autoReleaseMs`.
+  Opt out: `"reservationTtlMs": 0`.
+- **`/mesh stale`** — reservations held by peers, with age and TTL state.
+- **`npm run report`** — session/ledger health report (bursts, rejected
+  results, blocked sends, leaked reservations); exit 1 on findings.
 
 `.mesh/policy.json` (declarative governance, evaluated at send time):
 
@@ -187,7 +212,8 @@ Env overrides: `MESH_ALIAS`, `MESH_ROOMS`, `MESH_RUNTIME_DIR`,
 `MESH_MAILBOX_CAP`, `MESH_MAILBOX_TTL_MS`, `MESH_TRANSCRIPT=1`,
 `MESH_ACTIVITY_IDLE_MS`, `MESH_ACTIVITY_STUCK_MS`,
 `MESH_RESERVATION_TTL_MS`, `MESH_INBOUND_BATCH_MS`,
-`MESH_INBOUND_BATCH_MAX_HOLD_MS`, `MESH_POLICY`.
+`MESH_INBOUND_BATCH_MAX_HOLD_MS`, `MESH_POLICY`, `MESH_WATCHDOG=0`,
+`MESH_CONTEXT_VERBOSE=1`.
 
 **Commands** — `/mesh status [room] · join <room> [as <alias>] [observer] ·
 leave <room> · alias [<new-alias>] · new [--history] · reset · log [on|off] ·
@@ -213,6 +239,8 @@ ping <alias> · broker · help`.
   pending awaits, transcript state and the last inbound preview.
 - `/mesh broker` reports the version, session file size and compaction
   count, with a `/mesh new` hint past 15 MB.
+- `/mesh stale` lists every reservation held by peers with its age —
+  the operator sees in one glance who to ping or wait for.
 
 The **`mesh-coordination` skill** (skills/mesh-coordination) is bundled in
 the package: a protocol guide for agents (reply once per msgId, expired ≠

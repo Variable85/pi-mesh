@@ -43,11 +43,17 @@ export interface MeshRuntime {
   batcher?: { flushNow(): void };
   /** Display-only entry outside the LLM context (mesh-verdict colors). */
   appendEntry?: (type: string, data: unknown) => void;
+  /** pending auto-release timers per reserved pattern (mesh_reserve
+  *  autoReleaseMs) — cleared on release and at session_shutdown. */
+  reserveTimers?: Map<string, NodeJS.Timeout>;
   /** While set (ms epoch), inbound frames are HELD, not injected — the
    *  provider is rejecting turns (429) and every injection burns one. */
   rateLimitedUntil?: number;
   /** Deliver everything queued while rate-limited (called at hold expiry). */
   flushHeld?: () => void;
+  /** Called by the context watchdog when a compaction is detected —
+  *  lets attach.ts resync the mesh context block (conventions lost). */
+  onCompactionDetected?: () => void;
   startedAt: number;
   /** inbound-path disk/injection failure counters (see index.ts). */
   ledgerFailures: number;
@@ -99,6 +105,70 @@ function safeLedger(rt: MeshRuntime, input: Parameters<MeshLedger["append"]>[0])
   } catch {
   // fail-closed throw is for forbidden keys; our records never contain them
   }
+}
+
+// ---------------------------------------------------------------- send guards
+
+/** Minimum busy duration before an awaitReply warning (a 30 s bash turn
+ *  must not nag — measured incident: 6/6 expired missions toward agents
+ *  running 4-10 min GPU renders). */
+export const BUSY_WARN_MIN_MS = 300_000; // 5 min
+
+export interface TargetCheck {
+  /** Hard local error — the target can NEVER be a real alias. */
+  error?: string;
+  /** How to fix it (appended to the error text). */
+  hint?: string;
+  /** Non-blocking caution (alias unseen — may be offline/renamed). */
+  warning?: string;
+}
+
+/**
+ * Local mesh_send target validation (M1). Catches address-space
+ * confusions BEFORE the broker round-trip — observed in the wild:
+ * to:"*" and to:"cs-room-broadcast" (broadcast intent), both doomed.
+ * A syntactically-fine alias that is simply not (yet) known is only a
+ * WARNING: presence is best-effort, never a reason to block a send.
+ */
+export function checkSendTarget(
+  to: string,
+  knowsPeer: (alias: string) => boolean,
+  knownCount: number,
+): TargetCheck {
+  if (to === "*") {
+    return {
+      error: "invalid_target",
+      hint: '"*" is not an alias — to reach a whole room use broadcast: true (omit to)',
+    };
+  }
+  if (/^[a-z0-9][a-z0-9.-]*-broadcast$/.test(to) && !knowsPeer(to)) {
+    return {
+      error: "invalid_target",
+      hint: `"${to}" looks like a room-broadcast pseudo-target — use broadcast: true (no such alias online)`,
+    };
+  }
+  if (knownCount > 0 && !knowsPeer(to)) {
+    return {
+      warning: `@${to} not in the latest presence — offline or renamed? (the send still goes out; statuses stay honest)`,
+    };
+  }
+  return {};
+}
+
+/** Busy-target warning for awaitReply sends. Pure. */
+export function busyTargetWarning(
+  to: string,
+  busyMs: number | undefined,
+  timeoutMs: number,
+  minBusyMs: number = BUSY_WARN_MIN_MS,
+): string | undefined {
+  if (busyMs === undefined || busyMs < minBusyMs) return undefined;
+  if (timeoutMs >= busyMs) return undefined; // the timeout outlives the busy span
+  return (
+    `⚠ @${to} has been busy for ${formatElapsed(busyMs)} while timeoutMs is ` +
+    `${formatElapsed(timeoutMs)} — the mission will likely expire. Prefer burst mode ` +
+    `(awaitReply: true, block: false) + mesh_wait_all, or raise timeoutMs.`
+  );
 }
 
 // ---------------------------------------------------------------- mesh_send
@@ -205,6 +275,38 @@ async function execMeshSend(
       : undefined;
   const bodyHash = sha256(message);
   const reasonHash = priority === "force" && reason !== undefined ? sha256(reason) : undefined;
+  // M1 send guards: local rejection of impossible targets + soft warning
+  // for unseen aliases — BEFORE any broker round-trip. NOTE: to==="*" here
+  // can ONLY come from an explicit to:"*" (broadcast sends skip this block
+  // — they set to internally and never re-enter), so it is caught too.
+  const sendWarnings: string[] = [];
+  if (!broadcast) {
+    const check = checkSendTarget(
+      to,
+      (a) => rt.client.knowsPeer(a),
+      rt.client.knownPeerList.length,
+    );
+    if (check.error !== undefined) {
+      safeLedger(rt, {
+        event: "blocked", from: rt.client.alias, to, room, priority, bodyHash, reasonHash, refs, code: check.error,
+      });
+      return textResult(
+        `blocked: ${check.error} — ${check.hint ?? ""}`,
+        sendDetails({ status: "blocked", reason: check.error, to, room, priority, bodyHash }),
+      );
+    }
+    if (check.warning !== undefined) sendWarnings.push(check.warning);
+  }
+  // M2 busy-target warning: awaitReply toward a peer busy for longer than
+  // the timeout is a near-certain expiry (measured: 6/6 in cs-room).
+  if (!broadcast && awaitReply) {
+    const busyWarn = busyTargetWarning(
+      to,
+      rt.client.busyForMs(to),
+      timeoutMs ?? DEFAULT_AWAIT_REPLY_TIMEOUT_MS,
+    );
+    if (busyWarn !== undefined) sendWarnings.push(busyWarn);
+  }
 
   // Guards: self-send, duplicate window, client caps, observer.
   const guard = rt.guards.checkSend({ from: rt.client.alias, to, room, body: message, priority });
@@ -278,12 +380,18 @@ async function execMeshSend(
     reason: "reason" in res ? res.reason : undefined,
   });
   if (guard.warnings.includes(LOOP_GUARD_WARNING)) details.loopGuard = "matched";
+  if (sendWarnings.length > 0) {
+    details.warnings = sendWarnings;
+    details.warning = sendWarnings.join(" | ");
+  }
   // launch-mode hint so the agent knows the verdict comes from wait_all
   const hint =
     launch && (res.status === "delivered" || res.status === "queued_offline")
       ? ` (mission tracked — use mesh_wait_all for the group verdict)`
       : "";
-  return textResult(`${resultText(res)}${hint}`, details);
+  const warnSuffix =
+    sendWarnings.length > 0 ? `\n${sendWarnings.map((w) => `  ${w}`).join("\n")}` : "";
+  return textResult(`${resultText(res)}${hint}${warnSuffix}`, details);
 }
 
 // ---------------------------------------------------------------- mesh_reply
@@ -656,12 +764,15 @@ async function execMeshWaitAll(
   }
   for (const m of res.missing) {
     const act = rt.client.activityOf(m.to)?.state;
+    const busyMs = rt.client.busyForMs(m.to);
     const reason =
-      act === "rate_limited"
-        ? " — rate-limited, retry later"
-        : act === "blocked"
-          ? " — blocked (provider error, needs intervention)"
-          : "";
+      busyMs !== undefined && busyMs > 60_000
+        ? ` — still busy (${formatElapsed(busyMs)})`
+        : act === "rate_limited"
+          ? " — rate-limited, retry later"
+          : act === "blocked"
+            ? " — blocked (provider error, needs intervention)"
+            : "";
     lines.push(`  ✗ @${m.to}: NOT ANSWERED (${m.msgId.slice(0, 18)})${reason}`);
   }
   if (res.total === 0) lines.push("  (no awaited missions — send with awaitReply: true first)");
@@ -745,9 +856,48 @@ const MESH_RESERVE_PARAMETERS: Record<string, unknown> = {
         "paths as-is (backslashes tolerated).",
     },
     reason: { type: "string", description: "Why you're reserving these paths (visible to peers)." },
+    autoReleaseMs: {
+      type: "number",
+      minimum: 1_000,
+      maximum: 86_400_000,
+      description:
+        "Auto-release after this long (bounded runs — e.g. GPU renders). " +
+        "Fire-and-forget local timer; mesh_release({}) cancels everything.",
+    },
   },
   required: ["paths"],
 };
+
+/** Arm one auto-release timer per freshly reserved pattern. */
+function armReserveTimers(rt: MeshRuntime, patterns: string[], ms: number): void {
+  rt.reserveTimers ??= new Map();
+  for (const pattern of patterns) {
+    const prev = rt.reserveTimers.get(pattern);
+    if (prev !== undefined) clearTimeout(prev);
+    const t = setTimeout(() => {
+      rt.reserveTimers?.delete(pattern);
+      void rt.client.release([pattern]).catch(() => {}); // best effort
+      try {
+        rt.identity.save(identityFromClient(rt.sessionId, rt.client));
+      } catch {
+  // best effort
+      }
+    }, ms);
+    t.unref();
+    rt.reserveTimers.set(pattern, t);
+  }
+}
+
+/** Clear auto-release timers (release/shutdown). */
+function clearReserveTimers(rt: MeshRuntime, patterns?: string[]): void {
+  if (rt.reserveTimers === undefined) return;
+  for (const [pattern, t] of [...rt.reserveTimers]) {
+    if (patterns === undefined || patterns.includes(pattern)) {
+      clearTimeout(t);
+      rt.reserveTimers.delete(pattern);
+    }
+  }
+}
 
 async function execMeshReserve(
   getRuntime: GetRuntime,
@@ -762,12 +912,18 @@ async function execMeshReserve(
     return textResult("error: invalid_pattern (paths required)", sendDetails({ status: "error", reason: "invalid_pattern" }));
   }
   const reason = str(params.reason);
+  const autoReleaseMs =
+    typeof params.autoReleaseMs === "number" && params.autoReleaseMs >= 1_000
+      ? Math.min(86_400_000, Math.floor(params.autoReleaseMs))
+      : undefined;
   const res = await rt.client.reserve(rawPaths, reason);
   if (res.status === "delivered") {
     safeLedger(rt, { event: "reserved", id: res.msgId, from: rt.client.alias, refs: rawPaths, code: reason });
+    if (autoReleaseMs !== undefined) armReserveTimers(rt, rawPaths, autoReleaseMs);
   // reservations must survive /reload → persist identity now.
     rt.identity.save(identityFromClient(rt.sessionId, rt.client));
-    return textResult(`reserved ${rawPaths.length} path(s) — peers notified`, sendDetails({ status: "delivered", paths: rawPaths, reason }));
+    const auto = autoReleaseMs !== undefined ? ` — auto-release in ${formatElapsed(autoReleaseMs)}` : "";
+    return textResult(`reserved ${rawPaths.length} path(s) — peers notified${auto}`, sendDetails({ status: "delivered", paths: rawPaths, reason, autoReleaseMs }));
   }
   const resReason = "reason" in res ? res.reason : "error";
   safeLedger(rt, { event: "blocked", from: rt.client.alias, refs: rawPaths, code: resReason });
@@ -797,6 +953,7 @@ async function execMeshRelease(
     ? params.paths.filter((p): p is string => typeof p === "string")
     : undefined;
   const res = await rt.client.release(rawPaths);
+  clearReserveTimers(rt, rawPaths); // release cancels pending auto-releases
   if (res.status === "delivered") {
     safeLedger(rt, { event: "released", from: rt.client.alias, refs: res.released.length > 0 ? res.released : undefined });
   // persist the reduced reservation set before returning.
@@ -909,13 +1066,15 @@ export function registerTools(pi: ExtensionAPI, getRuntime: GetRuntime): void {
     label: "Mesh Reserve",
     description:
       "Reserve files/directories so other agents' edit/write tools get blocked " +
-      "on them. Trailing '/' reserves a subtree. Reservations live with the " +
-      "connection: they vanish when this session disconnects. Peers are " +
+      "on them. Trailing '/' reserves a subtree. Reservations expire for " +
+      "conflict checks after reservationTtlMs (default 6 h) — re-reserve to " +
+      "renew. autoReleaseMs bounds a run: the claim self-releases. Peers are " +
       "notified immediately; use mesh_release when done.",
     promptSnippet: "Claim files before editing to avoid concurrent edits.",
     promptGuidelines:
       "Reserve before editing a shared file, release when done. " +
-      "mesh_release({}) releases everything.",
+      "mesh_release({}) releases everything. Long run (>4 h)? Re-reserve " +
+      "periodically or set autoReleaseMs.",
     parameters: MESH_RESERVE_PARAMETERS,
     execute: (_toolCallId, params, _signal, _onUpdate, _ctx) => execMeshReserve(getRuntime, params),
   });

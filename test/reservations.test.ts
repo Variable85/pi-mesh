@@ -94,3 +94,21 @@ describe("reservation TTL (D33)", () => {
     assert.equal(findConflict("web/stale.js", map, "alice", 0)?.alias, "bob");
   });
 });
+
+// ---- v0.5: the DEFAULT TTL is now 6 h (DEFAULT_RESERVATION_TTL_MS) ----
+import { DEFAULT_RESERVATION_TTL_MS } from "../src/shared/config.js";
+
+describe("reservation TTL default change (v0.5)", () => {
+  it("default is 6 h — 7 h idle-held leaks expire, 3 h GPU runs survive", () => {
+    assert.equal(DEFAULT_RESERVATION_TTL_MS, 21_600_000);
+    const now = Date.now();
+    const gpuRun = new Date(now - 3 * 3_600_000).toISOString(); // 3 h — legit
+    const leak = new Date(now - 7 * 3_600_000).toISOString(); // 7 h idle — leak
+    const map = new Map<string, readonly FileReservation[]>([
+      ["gpu-agent", [{ pattern: "webgpu-viewer.js", since: gpuRun }]],
+      ["leak-agent", [{ pattern: "tools/old.js", since: leak }]],
+    ]);
+    assert.equal(findConflict("webgpu-viewer.js", map, "me", DEFAULT_RESERVATION_TTL_MS)?.alias, "gpu-agent");
+    assert.equal(findConflict("tools/old.js", map, "me", DEFAULT_RESERVATION_TTL_MS), undefined);
+  });
+});
