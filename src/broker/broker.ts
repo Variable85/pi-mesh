@@ -2,7 +2,7 @@
 // mailbox, rate limits, policy. Stateless in-memory (rooms/mailbox are
 // re-declared by clients at hello).
 // Run directly (`node dist/src/broker/broker.js`) or via startBroker({config, policy}) in tests.
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import net, { type Server, type Socket } from "node:net";
 import tls from "node:tls";
 import { fileURLToPath } from "node:url";
@@ -100,6 +100,17 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
   const sockPath = options.socketPath ?? brokerSocketPath();
   const state = new BrokerState();
   const tcp = options.tcpListen;
+  // D39: broker-side lifecycle debug (MESH_DEBUG=1) — destroys, write
+  // failures, close reasons. NEVER bodies.
+  const dbg = (line: string): void => {
+    if (config.debug !== true) return;
+    try {
+      mkdirSync(stateDir(), { recursive: true });
+      appendFileSync(`${stateDir()}/broker-debug.log`, `${new Date().toISOString()} ${line}\n`);
+    } catch {
+      // best effort
+    }
+  };
   // sockets that arrived over TCP/TLS — these require the shared token at
   // hello; local unix-socket connections stay tokenless (filesystem perms).
   const tokenSockets = new WeakSet<Socket>();
@@ -109,6 +120,7 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
   // identity guard — only close if this exact record is still current
   // (the alias may have re-hello'd onto a new socket since the write).
       if (!ok && state.peers.get(peer.alias) === peer) {
+        dbg(`sendTo: write FAILED to ${peer.alias} (${frame.type}) → closePeer`);
         closePeer(state, peer.alias, "write_failure");
       }
     });
@@ -625,6 +637,7 @@ const serverHandler = (socket: Socket, tokenRequired = false): void => {
     const decoder = new FrameDecoder(config.maxFrameBytes);
   // handshake bound: hello ≤ 5 s
     const helloTimer = setTimeout(() => {
+      dbg(`helloTimer: destroying socket after ${HELLO_TIMEOUT_MS}ms without hello`);
       sendError(socket, "timeout");
       socket.destroy();
     }, HELLO_TIMEOUT_MS);
@@ -660,7 +673,10 @@ const serverHandler = (socket: Socket, tokenRequired = false): void => {
     socket.on("close", () => {
       clearTimeout(helloTimer);
       for (const peer of [...state.peers.values()]) {
-        if (peer.socket === socket) closePeer(state, peer.alias, "socket_closed");
+        if (peer.socket === socket) {
+          dbg(`socket closed: ${peer.alias} (had hello=${peer.helloDone}, lastSeen ${Date.now() - peer.lastSeenAt}ms ago)`);
+          closePeer(state, peer.alias, "socket_closed");
+        }
       }
     });
 };
@@ -689,6 +705,7 @@ const onTcpConn = (socket: Socket): void => serverHandler(socket, true);
     const now = Date.now();
     for (const peer of [...state.peers.values()]) {
       if (peer.helloDone && now - peer.lastSeenAt > config.brokerSilenceMs) {
+        dbg(`sweep: destroying ${peer.alias} (silent ${now - peer.lastSeenAt}ms > ${config.brokerSilenceMs}ms)`);
         peer.socket.destroy(); // close event → closePeer
       }
     }

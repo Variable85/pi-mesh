@@ -1,7 +1,7 @@
 // client/client.ts — MeshClient: connect/send/reply/status/join/leave/close.
 // Pi-independent: emits events; the extension adapter consumes them.
 import { EventEmitter } from "node:events";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import net, { type Socket } from "node:net";
 import tls from "node:tls";
 import { randomBytes } from "node:crypto";
@@ -1007,6 +1007,7 @@ export class MeshClient extends EventEmitter {
   private debug(line: string): void {
     if (this.config.debug !== true) return;
     try {
+      mkdirSync(stateDir(), { recursive: true });
       appendFileSync(
         `${stateDir()}/client-debug.log`,
         `${new Date().toISOString()} [${this.alias}] ${line}\n`,
