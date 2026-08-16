@@ -2,9 +2,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { MeshClient, type SendResult } from "../client/client.js";
-import { connectProbe } from "../client/reconnect.js";
+import { connectProbe, connectProbeTcp } from "../client/reconnect.js";
 import { ALIAS_RAND_CHARS, STATUS_REQ_TIMEOUT_MS } from "../shared/config.js";
-import { loadConfig } from "../shared/config.js";
+import { loadConfig, parseEndpoint, type MeshConfig } from "../shared/config.js";
 import {
   brokerLockPath,
   brokerSocketPath,
@@ -20,6 +20,13 @@ const CLI_SEND_TIMEOUT_MS = 30_000;
 
 function cliAlias(): string {
   return `cli-${randomBytes(ALIAS_RAND_CHARS / 2).toString("hex").slice(0, ALIAS_RAND_CHARS)}`;
+}
+
+/** Client config from <cwd>/.mesh/config.json + env (MESH_BROKER_URL,
+ *  MESH_BROKER_TOKEN…) — lets the CLI reach remote tcp/tls brokers exactly
+ *  like extension clients do. */
+function cliConfig(): Partial<MeshConfig> {
+  return loadConfig(stateDir());
 }
 
 function argValue(args: string[], flag: string): string | undefined {
@@ -112,7 +119,7 @@ async function cmdBroker(sub: string | undefined): Promise<number> {
 
 async function cmdPeers(args: string[]): Promise<number> {
   const room = argValue(args, "--room");
-  const client = new MeshClient({ alias: cliAlias(), noReconnect: true });
+  const client = new MeshClient({ alias: cliAlias(), noReconnect: true, config: cliConfig() });
   try {
     await client.connect();
   } catch {
@@ -140,7 +147,7 @@ async function cmdSend(args: string[]): Promise<number> {
     process.stderr.write("usage: mesh send <alias> <texte> [--room R] [--await] [--timeout MS]\n");
     return 2;
   }
-  const client = new MeshClient({ alias: cliAlias(), noReconnect: true });
+  const client = new MeshClient({ alias: cliAlias(), noReconnect: true, config: cliConfig() });
   const result = await client.send({
     to,
     message: text,
@@ -160,7 +167,7 @@ async function cmdRoom(args: string[], sub: string): Promise<number> {
 `);
     return 2;
   }
-  const client = new MeshClient({ alias: cliAlias(), noReconnect: true });
+  const client = new MeshClient({ alias: cliAlias(), noReconnect: true, config: cliConfig() });
   try {
     await client.connect();
     if (sub === "join") {
@@ -196,7 +203,7 @@ async function cmdReserve(args: string[]): Promise<number> {
     process.stderr.write("usage: mesh reserve <path> [--reason R]\n");
     return 2;
   }
-  const client = new MeshClient({ alias: cliAlias(), noReconnect: true });
+  const client = new MeshClient({ alias: cliAlias(), noReconnect: true, config: cliConfig() });
   try {
     await client.connect();
     const res = await client.reserve(paths, reason);
@@ -237,12 +244,12 @@ async function cmdDoctor(): Promise<number> {
   const cfg = loadConfig(stateDir());
   const url = cfg.brokerUrl;
   const listen = cfg.listen;
-  const reachable = url !== undefined
-    ? await connectProbe(
-        url.startsWith("unix://") ? url.slice("unix://".length) : url,
-        STATUS_REQ_TIMEOUT_MS,
-      )
-    : await connectProbe(sock, STATUS_REQ_TIMEOUT_MS);
+  const endpoint = url !== undefined ? parseEndpoint(url) : null;
+  const reachable = endpoint === null
+    ? await connectProbe(sock, STATUS_REQ_TIMEOUT_MS)
+    : endpoint.kind === "unix"
+      ? await connectProbe(endpoint.path, STATUS_REQ_TIMEOUT_MS)
+      : await connectProbeTcp(endpoint.host, endpoint.port, STATUS_REQ_TIMEOUT_MS);
   let lockInfo = "absent";
   let stale = false;
   if (existsSync(lock)) {
@@ -260,7 +267,11 @@ async function cmdDoctor(): Promise<number> {
   process.stdout.write(
     [
       `runtimeDir: ${dir}`,
-      `socket: ${sock} reachable=${reachable}`,
+      url !== undefined
+        ? `endpoint: ${url} reachable=${reachable}`
+        : `socket: ${sock} reachable=${reachable}`,
+      `brokerUrl: ${url ?? "(local unix socket)"}`,
+      `listen: ${listen ?? "(unix socket)"}`,
       `lock: ${lockInfo}${stale ? " STALE" : ""}`,
       `config: ${cfgInfo}`,
       `protocol: mesh.v1`,

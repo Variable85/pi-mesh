@@ -222,23 +222,35 @@ demand like any pi skill.
 ## Multi-machine
 
 The mesh is loopback-only by default; to connect several machines (a VPS, a
-LAN PC, …) start the broker on ONE machine in **TCP mode** with a shared
-token, and point the other machines' clients at it:
+LAN PC, a MacBook over Wi-Fi …) start the broker on ONE machine with
+`MESH_LISTEN=tcp://…` and a shared token, and point the other machines'
+clients at it. Since **v0.4.18** the broker listens on **both endpoints at
+once** (dual listen): the local unix socket keeps serving local sessions
+tokenless (file-perm protected, zero disruption) while the tcp/tls endpoint
+admits remote machines with the token.
 
 ```bash
 # Machine A (broker + agents) — open the port in the firewall
 MESH_LISTEN=tcp://0.0.0.0:8712 MESH_BROKER_TOKEN=change-me pi
+# → broker up endpoints=tcp://0.0.0.0:8712 + unix:///tmp/mesh-<uid>/broker.sock
 
 # Machine B (clients only — no local broker is spawned)
 MESH_BROKER_URL=tcp://<machine-A>:8712 MESH_BROKER_TOKEN=change-me pi
 ```
 
+- The broker standalone honors `MESH_LISTEN`/`listen` in `config.json`
+  (tcp:// and tls://); the local unix socket stays up in tcp/tls mode so
+  already-running local sessions reconnect untouched.
+- The token is **required for tcp/tls connections** (per connection: a hello
+  without it is refused with `invalid_token`, token travels hashed); local
+  unix-socket connections never need it.
+- The CLI (`mesh doctor|peers|send|reserve|join`) honors `MESH_BROKER_URL`
+  / `MESH_BROKER_TOKEN` / `.mesh/config.json` exactly like extension
+  clients — remote machines can debug with `mesh doctor`.
 - `tcp://` for LAN/VPN (Tailscale/ZeroTier/WireGuard recommended),
   `tls://` for a VPS (set `MESH_TLS_CERT`/`MESH_TLS_KEY` on the broker;
   clients may set `MESH_TLS_CA`, or `MESH_TLS_INSECURE=1` for self-signed —
   dev only).
-- The token is **required** for tcp/tls listens; a hello without it is
-  refused (`invalid_token`, token travels hashed).
 - Everything works unchanged across machines: rooms, broadcast, read
   receipts, mailbox, reservations, turn state (state lives in the broker).
   `mesh doctor` checks the endpoint/auth on any machine.

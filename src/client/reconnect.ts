@@ -74,6 +74,25 @@ export function connectProbe(socketPath: string, timeoutMs: number): Promise<boo
   });
 }
 
+/** Try to connect to a remote tcp/tls broker endpoint (host/port probe). */
+export function connectProbeTcp(host: string, port: number, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host, port });
+    let settled = false;
+    const finish = (ok: boolean): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(ok);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    timer.unref();
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+  });
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => {
     const t = setTimeout(r, ms);

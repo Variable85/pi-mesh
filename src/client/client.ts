@@ -684,6 +684,10 @@ export class MeshClient extends EventEmitter {
       socket = net.createConnection(sockPath);
     }
     this.socket = socket;
+  // persistent noop error listener — a write racing a broker-side destroy
+  // (e.g. invalid_token: broker answers + closes) must never surface as an
+  // unhandled 'error' event after the handshake promise already settled.
+    socket.on("error", () => {});
     const decoder = new FrameDecoder(this.config.maxFrameBytes);
 
     const welcome = await new Promise<WelcomeInfo>((resolve, reject) => {

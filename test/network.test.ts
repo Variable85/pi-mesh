@@ -2,6 +2,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
+import path from "node:path";
 import { MeshClient } from "../src/client/client.js";
 import { createBroker } from "../src/broker/broker.js";
 import { DEFAULT_POLICY } from "../src/broker/policy.js";
@@ -89,6 +90,75 @@ describe("TCP broker + token auth (D37)", () => {
     try {
       const evil = netClient("evil", port, "wrong");
       await assert.rejects(() => evil.connect(), /invalid_token/);
+    } finally {
+      await broker.close();
+      rmSync(dirs.root, { recursive: true, force: true });
+    }
+  });
+});
+
+/** D38 dual listen: local unix socket (tokenless) + tcp (token) at once. */
+async function dualBroker(token: string): Promise<{
+  broker: Awaited<ReturnType<typeof createBroker>>;
+  port: number;
+  dirs: TempDirs;
+}> {
+  const dirs = makeTempDirs("mesh-dual-");
+  const socketPath = path.join(dirs.runtimeDir, "broker.sock");
+  const broker = await createBroker({
+    config: { ...DEFAULT_CONFIG, brokerToken: token },
+    policy: DEFAULT_POLICY,
+    socketPath,
+    tcpListen: { host: "127.0.0.1", port: 0, tls: false },
+    alsoUnix: true,
+  });
+  const addr = broker.server.address();
+  const port = typeof addr === "object" && addr !== null && "port" in addr ? addr.port : 0;
+  return { broker, port, dirs };
+}
+
+describe("dual listen: unix (tokenless) + tcp (token) — D38", () => {
+  it("local unix client needs no token, tcp client does, messages flow both ways", async () => {
+    const { broker, port, dirs } = await dualBroker("lan-token");
+    const local = new MeshClient({ alias: "local-agent", runtimeDir: dirs.runtimeDir });
+    const remote = netClient("remote-agent", port, "lan-token");
+    try {
+      assert.ok(port > 0, "tcp port assigned");
+      assert.match(broker.socketPath, /broker\.sock/, "both endpoints reported");
+      await local.connect(); // unix — NO token configured, must pass
+      await remote.connect(); // tcp — token, must pass
+      const got = new Promise<{ body?: string }>((resolve) => {
+        remote.once("inbound", (f) => resolve(f));
+      });
+      const sent = await local.send({ to: "remote-agent", message: "lan-hello" });
+      assert.equal(sent.status, "delivered");
+      assert.equal((await got).body, "lan-hello");
+      const back = new Promise<{ body?: string }>((resolve) => {
+        local.once("inbound", (f) => resolve(f));
+      });
+      const sentBack = await remote.send({ to: "local-agent", message: "unix-back" });
+      assert.equal(sentBack.status, "delivered");
+      assert.equal((await back).body, "unix-back");
+      const snap = await local.status();
+      assert.ok(snap.peers.some((p) => p.alias === "remote-agent"));
+    } finally {
+      await local.close().catch(() => {});
+      await remote.close().catch(() => {});
+      await broker.close();
+      rmSync(dirs.root, { recursive: true, force: true });
+    }
+  });
+
+  it("tcp without token still refused while unix stays open", async () => {
+    const { broker, port, dirs } = await dualBroker("lan-token");
+    const local = new MeshClient({ alias: "local-2", runtimeDir: dirs.runtimeDir });
+    try {
+      const rogue = netClient("rogue", port, undefined);
+      await assert.rejects(() => rogue.connect(), /invalid_token/);
+      await local.connect(); // unix unaffected by the tcp refusal
+      const snap = await local.status();
+      assert.ok(Array.isArray(snap.peers));
+      await local.close();
     } finally {
       await broker.close();
       rmSync(dirs.root, { recursive: true, force: true });

@@ -45,6 +45,10 @@ export interface BrokerOptions {
   socketPath?: string;
   /** TCP/TLS listen (host+port) — otherwise the unix socket is used. */
   tcpListen?: { host: string; port: number; tls: boolean };
+  /** With tcpListen: ALSO keep serving the local unix socket (tokenless)
+  *  alongside TCP/TLS — local sessions keep working unchanged while
+  *  remote machines join over the network. */
+  alsoUnix?: boolean;
 }
 
 export interface RunningBroker {
@@ -96,6 +100,9 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
   const sockPath = options.socketPath ?? brokerSocketPath();
   const state = new BrokerState();
   const tcp = options.tcpListen;
+  // sockets that arrived over TCP/TLS — these require the shared token at
+  // hello; local unix-socket connections stay tokenless (filesystem perms).
+  const tokenSockets = new WeakSet<Socket>();
 
   const sendTo = (peer: PeerRecord, frame: MeshFrame): void => {
     writeFrame(peer.socket, frame, config.maxFrameBytes, (ok) => {
@@ -204,8 +211,9 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
       socket.destroy();
       return;
     }
-  // tcp/tls brokers require the shared token (sha256 match)
-    if (options.tcpListen !== undefined) {
+  // tcp/tls CONNECTIONS require the shared token (sha256 match); local
+  // unix-socket connections are tokenless (protected by file perms).
+    if (tokenSockets.has(socket)) {
       const expected = config.brokerToken !== undefined ? sha256(config.brokerToken) : undefined;
       if (expected === undefined || frame.token !== expected) {
         sendError(socket, "invalid_token", frame.id);
@@ -605,7 +613,8 @@ function broadcastReservations(
   }
 }
 
-const serverHandler = (socket: Socket): void => {
+const serverHandler = (socket: Socket, tokenRequired = false): void => {
+    if (tokenRequired) tokenSockets.add(socket);
     socket.setNoDelay(true);
     const decoder = new FrameDecoder(config.maxFrameBytes);
   // handshake bound: hello ≤ 5 s
@@ -650,15 +659,24 @@ const serverHandler = (socket: Socket): void => {
     });
 };
 
-const server = tcp !== undefined && tcp.tls
-    ? tls.createServer(
+const onTcpConn = (socket: Socket): void => serverHandler(socket, true);
+  const server = tcp === undefined
+    ? net.createServer((s) => serverHandler(s, false))
+    : tcp.tls
+      ? tls.createServer(
         {
           cert: config.tlsCert !== undefined ? readFileSync(config.tlsCert) : undefined,
           key: config.tlsKey !== undefined ? readFileSync(config.tlsKey) : undefined,
         },
-        serverHandler,
+        onTcpConn,
       )
-    : net.createServer(serverHandler);
+      : net.createServer(onTcpConn);
+  // D38 multi-machine: with alsoUnix the broker serves BOTH the local unix
+  // socket (tokenless — existing local sessions unchanged) and the tcp/tls
+  // endpoint (token required) for remote machines such as a LAN MacBook.
+  const unixServer = tcp !== undefined && options.alsoUnix === true
+    ? net.createServer((s) => serverHandler(s, false))
+    : undefined;
 
   // silence sweep: destroy sockets silent > brokerSilenceMs
   const sweep = setInterval(() => {
@@ -693,10 +711,22 @@ const server = tcp !== undefined && tcp.tls
   const mailboxPurge = setInterval(() => purgeAllExpired(state, config), MAILBOX_PURGE_INTERVAL_MS);
   mailboxPurge.unref();
 
+  const listening: Server[] = unixServer !== undefined ? [server, unixServer] : [server];
   return new Promise((resolve, reject) => {
-    server.once("error", reject);
+    let settled = false;
+    const fail = (err: Error): void => {
+      if (settled) return;
+      settled = true;
+      for (const srv of listening) srv.close();
+      reject(err);
+    };
+    for (const srv of listening) srv.once("error", fail);
+    let waiting = listening.length;
     const onListening = (): void => {
-      server.removeListener("error", reject);
+      waiting -= 1;
+      if (waiting > 0 || settled) return;
+      settled = true;
+      for (const srv of listening) srv.removeListener("error", fail);
       const addr = server.address();
       const bound = typeof addr === "object" && addr !== null && "port" in addr
         ? `tcp://${tcp?.host ?? "0.0.0.0"}:${addr.port}`
@@ -704,18 +734,25 @@ const server = tcp !== undefined && tcp.tls
       resolve({
         server,
         state,
-        socketPath: bound,
+        socketPath: unixServer !== undefined ? `${bound} + unix://${sockPath}` : bound,
         close: () =>
           new Promise<void>((res) => {
             clearInterval(sweep);
             clearInterval(mailboxPurge);
             for (const peer of state.peers.values()) peer.socket.destroy();
-            server.close(() => res());
+            let n = listening.length;
+            for (const srv of listening) {
+              srv.close(() => {
+                n -= 1;
+                if (n <= 0) res();
+              });
+            }
           }),
       });
     };
     if (tcp !== undefined) server.listen(tcp.port, tcp.host, onListening);
     else server.listen(sockPath, onListening);
+    if (unixServer !== undefined) unixServer.listen(sockPath, onListening);
   });
 }
 
@@ -864,7 +901,26 @@ export async function main(): Promise<void> {
   }
   const config = loadConfig(sDir);
   const policy = loadPolicy(sDir);
-  const broker = await createBroker({ config, policy, socketPath: sockPath });
+  // D38: honor MESH_LISTEN / config.listen (validated by loadConfig — only
+  // well-formed endpoints land here). tcp:// or tls:// opens the mesh to
+  // remote machines (shared token REQUIRED on those connections); the
+  // local unix socket stays up too (alsoUnix) so local sessions — which
+  // connect tokenless over the socket — are never disrupted.
+  const listenEndpoint = config.listen !== undefined ? parseEndpoint(config.listen) : null;
+  const tcpListen = listenEndpoint !== null && listenEndpoint.kind !== "unix"
+    ? { host: listenEndpoint.host, port: listenEndpoint.port, tls: listenEndpoint.kind === "tls" }
+    : undefined;
+  if (tcpListen?.tls === true && (config.tlsCert === undefined || config.tlsKey === undefined)) {
+    process.stderr.write("mesh broker: tls:// listen requires MESH_TLS_CERT and MESH_TLS_KEY\n");
+    process.exit(1);
+  }
+  const broker = await createBroker({
+    config,
+    policy,
+    socketPath: sockPath,
+    tcpListen,
+    alsoUnix: tcpListen !== undefined,
+  });
 
   const shutdown = (): void => {
     void broker.close().finally(() => {
@@ -883,7 +939,7 @@ export async function main(): Promise<void> {
   };
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
-  process.stdout.write(`mesh broker up pid=${process.pid} sock=${sockPath}\n`);
+  process.stdout.write(`mesh broker up pid=${process.pid} endpoints=${broker.socketPath}\n`);
 }
 
 const isMain = (() => {
