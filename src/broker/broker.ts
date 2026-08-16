@@ -242,6 +242,12 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
         typeof frame.clientVersion === "string" && frame.clientVersion.length > 0
           ? frame.clientVersion.slice(0, 64)
           : undefined,
+  // D40: connection origin — tcp/tls sockets carry the remote IP (shown in
+  // HUD/status so everyone sees WHICH machine a peer runs on); unix-socket
+  // peers are broker-local (via stays undefined).
+      via: tokenSockets.has(socket)
+        ? `${tcp?.tls === true ? "tls" : "tcp"}:${(socket.remoteAddress ?? "?").replace(/^::ffff:/, "")}`
+        : undefined,
     };
     state.peers.set(alias, peer);
     state.knownAliases.set(alias, Date.now()); // (re)stamp on every hello

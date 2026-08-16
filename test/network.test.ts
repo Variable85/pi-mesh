@@ -164,4 +164,25 @@ describe("dual listen: unix (tokenless) + tcp (token) — D38", () => {
       rmSync(dirs.root, { recursive: true, force: true });
     }
   });
+
+  it("D40: snapshot tags remote peers with via=tcp:<ip>, local peers undefined", async () => {
+    const { broker, port, dirs } = await dualBroker("lan-token");
+    const local = new MeshClient({ alias: "local-3", runtimeDir: dirs.runtimeDir });
+    const remote = netClient("remote-3", port, "lan-token");
+    try {
+      await local.connect();
+      await remote.connect();
+      const snap = await local.status();
+      const mine = snap.peers.find((p) => p.alias === "local-3");
+      const far = snap.peers.find((p) => p.alias === "remote-3");
+      assert.ok(mine !== undefined && far !== undefined);
+      assert.equal(mine.via, undefined, "unix-socket peer is broker-local");
+      assert.ok(/^tcp:127\.0\.0\.1$|^tcp:::1$/.test(far.via ?? ""), `tcp peer tagged, got ${far.via}`);
+    } finally {
+      await local.close().catch(() => {});
+      await remote.close().catch(() => {});
+      await broker.close();
+      rmSync(dirs.root, { recursive: true, force: true });
+    }
+  });
 });

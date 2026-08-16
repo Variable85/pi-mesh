@@ -564,6 +564,8 @@ async function execMeshStatus(
       const v = p.clientVersion !== undefined && p.clientVersion !== "" ? ` v${p.clientVersion}` : " v?";
       const skew = p.clientVersion !== undefined && p.clientVersion !== localVersion ? " ⚠" : "";
       const since = p.since !== undefined ? ` since=${p.since}` : "";
+  // D40: remote-machine peers (tcp/tls to the broker) carry their origin
+      const via = p.via !== undefined ? ` via=${p.via} ⟵ other machine` : "";
   // Phase 3: announced turn state wins; heuristic (lastSeenAt) as
   // fallback for peers that never announce (old versions)
       if (p.activity !== undefined) {
@@ -574,11 +576,11 @@ async function execMeshStatus(
             : p.activity.state === "blocked"
               ? " ✖ blocked (needs intervention)"
               : ` ○ idle (since ${localTime(p.activity.at)})`;
-        return `  @${p.alias} rooms=${p.rooms.join(",")}${v}${skew}${since}${tag}`;
+        return `  @${p.alias} rooms=${p.rooms.join(",")}${v}${skew}${since}${via}${tag}`;
       }
       const act = computePeerStatus(p.lastSeenAt, (p.reservations?.length ?? 0) > 0, rt.client.activityIdleMs, rt.client.activityStuckMs);
       const actTag = act.status === "active" ? "" : act.status === "stuck" ? ` ✕stuck ${act.idleFor}` : ` ○idle ${act.idleFor}`;
-      return `  @${p.alias} rooms=${p.rooms.join(",")}${v}${skew}${since}${actTag}`;
+      return `  @${p.alias} rooms=${p.rooms.join(",")}${v}${skew}${since}${via}${actTag}`;
     }),
     `mesh rooms: ${snap.rooms.length > 0 ? snap.rooms.join(", ") : "(none)"}`,
   ];
@@ -621,7 +623,7 @@ async function execMeshStatus(
     schema: "mesh.status.v1",
     alias: rt.client.alias,
     room,
-    peers: peers.map((p) => ({ alias: p.alias, rooms: p.rooms, since: p.since })),
+    peers: peers.map((p) => ({ alias: p.alias, rooms: p.rooms, since: p.since, via: p.via })),
     rooms: snap.rooms,
   });
 }

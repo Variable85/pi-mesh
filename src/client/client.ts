@@ -1,7 +1,7 @@
 // client/client.ts — MeshClient: connect/send/reply/status/join/leave/close.
 // Pi-independent: emits events; the extension adapter consumes them.
 import { EventEmitter } from "node:events";
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import net, { type Socket } from "node:net";
 import tls from "node:tls";
 import { randomBytes } from "node:crypto";
@@ -38,7 +38,7 @@ import {
   TRANSCRIPT_RING_SIZE,
   type MeshConfig,
 } from "../shared/config.js";
-import { runtimeDir } from "../shared/paths.js";
+import { runtimeDir, stateDir } from "../shared/paths.js";
 import { MESH_VERSION } from "../shared/version.js";
 import { PendingReplies } from "./pending.js";
 import { backoffMs, ensureBroker } from "./reconnect.js";
@@ -161,6 +161,9 @@ const BLOCKED_CODES = new Set([
   "force_requires_reason",
 ]);
 
+/** D39: offline watchdog kick interval (ms). */
+const WATCHDOG_INTERVAL_MS = 60_000;
+
 /** alias_taken: retries of the original alias before falling back to random. */
 const ALIAS_RETRY_ATTEMPTS = 4;
 const ALIAS_RETRY_DELAY_MS = 250;
@@ -211,6 +214,9 @@ export class MeshClient extends EventEmitter {
   private reconnectAttempt = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
+  /** D39 watchdog: guarantees recovery if the reconnect chain ever dies
+  *  (observed once on a remote TCP client: socket gone, no retry). */
+  private watchdogTimer: NodeJS.Timeout | null = null;
   private helloTimer: NodeJS.Timeout | null = null;
 
   private readonly ackWaiters = new Map<string, AckWaiter>();
@@ -717,10 +723,14 @@ export class MeshClient extends EventEmitter {
       socket = net.createConnection(sockPath);
     }
     this.socket = socket;
-  // persistent noop error listener — a write racing a broker-side destroy
+    this.debug(`doConnect: socket created → ${this.config.brokerUrl ?? "local unix"}`);
+  // persistent error listener — a write racing a broker-side destroy
   // (e.g. invalid_token: broker answers + closes) must never surface as an
   // unhandled 'error' event after the handshake promise already settled.
-    socket.on("error", () => {});
+  // MESH_DEBUG logs the wire-level reason (no bodies).
+    socket.on("error", (err: Error) => {
+      this.debug(`socket error: ${err.name}: ${err.message}`);
+    });
     const decoder = new FrameDecoder(this.config.maxFrameBytes);
 
     const welcome = await new Promise<WelcomeInfo>((resolve, reject) => {
@@ -779,6 +789,7 @@ export class MeshClient extends EventEmitter {
               for (const p of frame.peers ?? []) {
                 if (p.alias !== undefined && p.alias !== this.alias) this.knownPeers.add(p.alias);
               }
+              this.debug("handshake: welcome received");
               resolve({
                 alias: this.alias,
                 rooms: frame.rooms ?? [...this.joinedRooms],
@@ -799,6 +810,7 @@ export class MeshClient extends EventEmitter {
     });
 
     this.startHeartbeat();
+    this.startWatchdog();
     this.flushOutbox();
     this.emit("ready", welcome);
     return welcome;
@@ -811,8 +823,12 @@ export class MeshClient extends EventEmitter {
   }
 
   private onSocketClosed(closedSocket?: Socket): void {
+    this.debug(`onSocketClosed: online=${this.online} stale=${closedSocket !== undefined && this.socket !== closedSocket}`);
   // An explicit connect is in flight — it owns the socket lifecycle.
-    if (this.connecting) return;
+    if (this.connecting) {
+      this.debug("onSocketClosed: ignored — connect already in flight");
+      return;
+    }
   // Ignore stale closes from sockets we have already replaced (rename
   // retry loop, late close of a detached socket): only the CURRENT
   // socket's close may tear the connection down.
@@ -849,6 +865,11 @@ export class MeshClient extends EventEmitter {
       });
     }, delay);
     this.reconnectTimer.unref();
+  }
+
+  private stopWatchdog(): void {
+    if (this.watchdogTimer) clearInterval(this.watchdogTimer);
+    this.watchdogTimer = null;
   }
 
   private onFrame(frame: MeshFrame): void {
@@ -980,6 +1001,42 @@ export class MeshClient extends EventEmitter {
         break;
     }
     this.emit("frame", frame);
+  }
+
+  /** Wire-level lifecycle debug log (MESH_DEBUG=1). NEVER logs bodies. */
+  private debug(line: string): void {
+    if (this.config.debug !== true) return;
+    try {
+      appendFileSync(
+        `${stateDir()}/client-debug.log`,
+        `${new Date().toISOString()} [${this.alias}] ${line}\n`,
+      );
+    } catch {
+      // best effort — never break the connection path
+    }
+  }
+
+  /** D39: kick a connect() every WATCHDOG_INTERVAL_MS while offline. Any
+  *  state where online=false, no in-flight connect and no timer must heal
+  *  itself; connect() is idempotent while a connect is already running. */
+  private startWatchdog(): void {
+    if (this.watchdogTimer !== null) return;
+    this.watchdogTimer = setInterval(() => {
+      if (
+        this.online ||
+        this.connecting !== null ||
+        this.reconnectTimer !== null ||
+        this.intentionallyClosed ||
+        this.noReconnect
+      ) {
+        return; // healthy, already connecting, or a backoff is armed
+      }
+      this.debug(`watchdog: offline without in-flight connect — kicking connect() (attempts=${this.reconnectAttempt})`);
+      this.connect().catch((err: unknown) => {
+        this.debug(`watchdog: connect failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    }, WATCHDOG_INTERVAL_MS);
+    this.watchdogTimer.unref();
   }
 
   private startHeartbeat(): void {
@@ -1579,6 +1636,7 @@ export class MeshClient extends EventEmitter {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     this.stopHeartbeat();
+    this.stopWatchdog();
     this.pending.cancelAll("shutting_down");
     const socket = this.socket;
     this.socket = null;

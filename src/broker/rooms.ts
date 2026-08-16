@@ -113,6 +113,7 @@ export function peersSnapshot(state: BrokerState, roomId?: string): {
   reservations?: FileReservation[];
   clientVersion?: string;
   activity?: { state: "busy" | "idle" | "rate_limited" | "blocked"; at: string };
+  via?: string;
 }[] {
   const out: {
     alias: string;
@@ -123,6 +124,7 @@ export function peersSnapshot(state: BrokerState, roomId?: string): {
     reservations?: FileReservation[];
     clientVersion?: string;
     activity?: { state: "busy" | "idle" | "rate_limited" | "blocked"; at: string };
+    via?: string;
   }[] = [];
   for (const peer of state.peers.values()) {
     if (!peer.helloDone) continue;
@@ -137,6 +139,7 @@ export function peersSnapshot(state: BrokerState, roomId?: string): {
       reservations: peer.reservations.length > 0 ? [...peer.reservations] : undefined,
       clientVersion: peer.clientVersion,
       activity: peer.activity,
+      via: peer.via,
     });
   }
   return out;

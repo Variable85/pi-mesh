@@ -279,6 +279,12 @@ MESH_BROKER_URL=tcp://<machine-A>:8712 MESH_BROKER_TOKEN=change-me pi
   `tls://` for a VPS (set `MESH_TLS_CERT`/`MESH_TLS_KEY` on the broker;
   clients may set `MESH_TLS_CA`, or `MESH_TLS_INSECURE=1` for self-signed —
   dev only).
+- **Remote peers are visible**: every peer carries its connection origin
+  (`via=tcp:<ip>` / `tls:<ip>`; broker-local unix peers have none) — shown in
+  `mesh_status` (`via=… ⟵ other machine`), `/mesh status`, the session
+  context block, and the HUD peers line (`alias⌁<last-ip-octet>`).
+- `MESH_DEBUG=1` (env or `"debug": true` in config.json) logs wire-level
+  client lifecycle events to `<stateDir>/client-debug.log` — no bodies.
 - Everything works unchanged across machines: rooms, broadcast, read
   receipts, mailbox, reservations, turn state (state lives in the broker).
   `mesh doctor` checks the endpoint/auth on any machine.

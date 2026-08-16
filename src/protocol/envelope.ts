@@ -33,6 +33,9 @@ export interface MeshPeerInfo {
   clientVersion?: string;
   /** Announced turn state (busy/idle/rate_limited). */
   activity?: { state: "busy" | "idle" | "rate_limited" | "blocked"; at: string };
+  /** D40: how this peer reaches the broker — "tcp:<ip>"/"tls:<ip>" for
+  *  remote machines, undefined for broker-local (unix socket) peers. */
+  via?: string;
 }
 
 

@@ -262,12 +262,15 @@ export class MeshHud {
       peers: visiblePeers(this.snapshot, self, rooms).map((alias) => {
         const p = this.snapshot?.peers.find((x) => x.alias === alias);
         if (p === undefined) return alias;
+  // D40: ⌁ + last IP octet marks peers running on ANOTHER machine
+  // (full origin in mesh_status / /mesh status).
+        const remote = p.via !== undefined ? `⌁${p.via.split(":").pop() ?? "?"}` : "";
         const act = computePeerStatus(p.lastSeenAt, (p.reservations?.length ?? 0) > 0, rt?.client.activityIdleMs ?? 0, rt?.client.activityStuckMs ?? 0);
-        if (act.status === "stuck") return `${alias}✕`;
+        if (act.status === "stuck") return `${alias}✕${remote}`;
         if (p.activity !== undefined) {
-          return p.activity.state === "busy" ? `${alias}●` : `${alias}○`;
+          return p.activity.state === "busy" ? `${alias}●${remote}` : `${alias}○${remote}`;
         }
-        return act.status === "idle" ? `${alias}○` : alias;
+        return act.status === "idle" ? `${alias}○${remote}` : `${alias}${remote}`;
       }),
       pending: rt?.client.pendingCount ?? 0,
       transcriptOn: rt?.transcript.isEnabled() === true,

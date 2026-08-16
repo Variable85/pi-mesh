@@ -270,15 +270,19 @@ export function attachClientListeners(
     const others = welcome.peers.filter((p) => p.alias !== client.alias);
     const online = others.filter((p) => p.rooms.some((r) => myRooms.has(r)));
     const far = others.filter((p) => !p.rooms.some((r) => myRooms.has(r)));
+  // D40: peers on OTHER machines are tagged with their connection origin
+  // (via) so the agent knows who is remote (e.g. a MacBook over the LAN).
+    const viaTag = (p: { via?: string }): string =>
+      p.via !== undefined ? ` [${p.via} — other machine]` : "";
     const peerLine =
       online.length > 0
-        ? `Online peers: ${online.map((p) => `@${p.alias}`).join(", ")}.`
+        ? `Online peers: ${online.map((p) => `@${p.alias}${viaTag(p)}`).join(", ")}.`
         : "Online peers: (none).";
     const farLine =
       far.length > 0
         ? ` Other sessions: ${far
             .slice(0, 12)
-            .map((p) => `@${p.alias} (${p.rooms.join(",") || "?"})`)
+            .map((p) => `@${p.alias} (${p.rooms.join(",") || "?"})${viaTag(p)}`)
             .join(", ")}${far.length > 12 ? ` (+${far.length - 12} more)` : ""}.`
         : "";
     let context =

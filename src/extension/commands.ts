@@ -82,7 +82,7 @@ async function cmdStatus(rt: MeshRuntime, ctx: SessionContext, room?: string): P
     return;
   }
   const lines = snap.peers.map(
-    (p) => `@${p.alias} rooms=${p.rooms.join(",")}${p.since !== undefined ? ` since=${p.since}` : ""}`,
+    (p) => `@${p.alias} rooms=${p.rooms.join(",")}${p.since !== undefined ? ` since=${p.since}` : ""}${p.via !== undefined ? ` via=${p.via} ⟵ other machine` : ""}`,
   );
   notify(ctx, `mesh peers (${snap.peers.length}):\n${lines.join("\n")}\nrooms: ${snap.rooms.join(", ") || "(none)"}`);
 }

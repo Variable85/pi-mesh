@@ -15,6 +15,9 @@ export interface PeerRecord {
   reservations: FileReservation[];
   /** Phase 3: last announced turn state (busy = a turn is running). */
   activity?: { state: "busy" | "idle" | "rate_limited" | "blocked"; at: string };
+  /** D40: connection origin — "tcp:<remote-ip>" / "tls:<remote-ip>" for
+  *  network peers, undefined for broker-local unix-socket peers. */
+  via?: string;
 }
 
 export interface StoredMsg {

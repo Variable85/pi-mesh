@@ -162,6 +162,9 @@ export interface MeshConfig {
   inboundBatchMs?: number;
   /** safety cap — flush even while busy after this long (ms). */
   inboundBatchMaxHoldMs?: number;
+  /** client connection-lifecycle debug log (MESH_DEBUG=1) — wire-level
+  *  events only, NEVER bodies (hash-only discipline). */
+  debug?: boolean;
 }
 
 export const DEFAULT_CONFIG: MeshConfig = {
@@ -277,6 +280,7 @@ export function loadConfig(stateDir?: string, env: NodeJS.ProcessEnv = process.e
   if (typeof fileCfg.tlsKey === "string" && fileCfg.tlsKey !== "") cfg.tlsKey = fileCfg.tlsKey;
   if (typeof fileCfg.tlsCa === "string" && fileCfg.tlsCa !== "") cfg.tlsCa = fileCfg.tlsCa;
   if (fileCfg.tlsInsecure === true) cfg.tlsInsecure = true;
+  if (fileCfg.debug === true) cfg.debug = true;
 
   // env overrides (priority over config file)
   const envListen = env.MESH_LISTEN;
@@ -321,6 +325,7 @@ export function loadConfig(stateDir?: string, env: NodeJS.ProcessEnv = process.e
     const n = Number(env.MESH_INBOUND_BATCH_MS);
     cfg.inboundBatchMs = Number.isFinite(n) && n >= 0 ? Math.floor(n) : cfg.inboundBatchMs;
   }
+  if (env.MESH_DEBUG === "1" || env.MESH_DEBUG === "true") cfg.debug = true;
   const envTranscript = env.MESH_TRANSCRIPT;
   if (envTranscript !== undefined) cfg.transcript = envTranscript === "1" || envTranscript === "true";
 
