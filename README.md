@@ -283,6 +283,9 @@ MESH_BROKER_URL=tcp://<machine-A>:8712 MESH_BROKER_TOKEN=change-me pi
   (`via=tcp:<ip>` / `tls:<ip>`; broker-local unix peers have none) — shown in
   `mesh_status` (`via=… ⟵ other machine`), `/mesh status`, the session
   context block, and the HUD peers line (`alias⌁<last-ip-octet>`).
+- **Privacy note**: `via` exposes the peer IP as seen by the broker — fine
+  on a trusted LAN/home mesh; for a multi-org mesh, gate or truncate it
+  before it rides any presence broadcast (future policy hook).
 - `MESH_DEBUG=1` (env or `"debug": true` in config.json) logs wire-level
   client lifecycle events to `<stateDir>/client-debug.log` — no bodies.
 - Everything works unchanged across machines: rooms, broadcast, read
