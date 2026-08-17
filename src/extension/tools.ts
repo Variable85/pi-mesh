@@ -51,6 +51,10 @@ export interface MeshRuntime {
   rateLimitedUntil?: number;
   /** Deliver everything queued while rate-limited (called at hold expiry). */
   flushHeld?: () => void;
+  /** D41: flip the client-handler detach guard (session_shutdown). */
+  markDetached?: () => void;
+  /** D41: clear the rate-limit hold timer (session_shutdown). */
+  stopHold?: () => void;
   /** Called by the context watchdog when a compaction is detected —
   *  lets attach.ts resync the mesh context block (conventions lost). */
   onCompactionDetected?: () => void;

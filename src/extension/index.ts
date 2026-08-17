@@ -210,14 +210,26 @@ export default function meshExtension(pi: ExtensionAPI): void {
       holdTimer = setTimeout(() => {
         holdTimer = null;
         rt.rateLimitedUntil = undefined;
-        announce("idle");
+      // D41: after a reload the old holdTimer can fire on a CLOSED client;
+      // session_shutdown's stopHold() clears this timer, and this try/catch
+      // is the belt-and-braces (announce may touch a stale client/session).
         try {
+          announce("idle");
           rt.flushHeld?.();
         } catch {
           // delivery is best effort — never break the timer
         }
       }, holdMs);
       holdTimer.unref();
+    };
+  // D41: cleared at session_shutdown — a surviving timer would fire after
+  // the session (and its client) are gone.
+    rt.stopHold = () => {
+      if (holdTimer !== null) {
+        clearTimeout(holdTimer);
+        holdTimer = null;
+      }
+      rt.rateLimitedUntil = undefined;
     };
     const announce = (state: "busy" | "idle" | "rate_limited" | "blocked"): void => {
       if (announcedActivity === state) return;
@@ -339,6 +351,15 @@ export default function meshExtension(pi: ExtensionAPI): void {
     const h = hud;
     hud = null;
     h?.detach(); // clears BOTH widget and status
+  // D41: flip the client-handler guard BEFORE anything else — frames still
+  // in flight on the old socket must never touch the (about-to-be-stale)
+  // pi/ctx. This is the fix for the "extension ctx is stale" crash.
+    try {
+      rt?.markDetached?.();
+      rt?.stopHold?.();
+    } catch {
+      // best effort
+    }
     if (rt !== null) {
   // cancel any pending auto-release timers (mesh_reserve autoReleaseMs)
       try {

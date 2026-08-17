@@ -127,6 +127,21 @@ export function attachClientListeners(
   /** min gap between two live entries of the SAME agent (anti-flood). */
   liveCooldownMs: number = LIVE_COOLDOWN_MS,
 ): void {
+  // D41: after /reload, session switch or replacement, the OLD client may
+  // still receive frames while the pi/ctx it captured is STALE — calling
+  // pi.* then throws "extension ctx is stale" as an uncaughtException and
+  // kills pi. `detached` flips at session_shutdown; every pi/ctx touch in
+  // client handlers goes through guarded try/catch as belt-and-braces.
+  let detached = false;
+  const guarded = (fn: () => void): void => {
+    if (detached) return;
+    try {
+      fn();
+    } catch {
+      // stale ctx / shutting down — the event belongs to the old session
+    }
+  };
+
   const deps = {
     ledger: rt.ledger,
     transcript: rt.transcript,
@@ -145,15 +160,17 @@ export function attachClientListeners(
     const batch = buildBatchMessage(frames, (f) =>
       formatOptsFor(f, client.contextVerbosity === "full", client.homeRoom),
     );
-    pi.sendMessage(
-      {
-        customType: "mesh-inbound",
-        content: batch.content,
-        display: true,
-        details: batchDetails(frames),
-      },
-      { triggerTurn: true, deliverAs: batch.deliverAs },
-    );
+    guarded(() => {
+      pi.sendMessage(
+        {
+          customType: "mesh-inbound",
+          content: batch.content,
+          display: true,
+          details: batchDetails(frames),
+        },
+        { triggerTurn: true, deliverAs: batch.deliverAs },
+      );
+    });
   },
   );
   // rate-limited hold: while the provider rejects turns (429), inbound
@@ -168,9 +185,11 @@ export function attachClientListeners(
     };
     if (bypassesBatch(frame) || client.inboundBatchMs <= 0) {
       batcher.flushNow(); // deliver any pending batch first (ordering)
-      injectInbound(pi, rt.ctx, frame, {
-        ...opts,
-        replyChain: (frame as unknown as { __replyChain?: boolean }).__replyChain === true,
+      guarded(() => {
+        injectInbound(pi, rt.ctx, frame, {
+          ...opts,
+          replyChain: (frame as unknown as { __replyChain?: boolean }).__replyChain === true,
+        });
       });
       return;
     }
@@ -187,12 +206,14 @@ export function attachClientListeners(
       if (now - last >= liveCooldownMs) {
         liveCooldowns.set(from, now);
         if (liveCooldowns.size > 128) liveCooldowns.clear(); // bound
-        pi.appendEntry("mesh-live", {
-          from: frame.from,
-          room: frame.room,
-          priority: frame.priority,
-          body: frame.body,
-          at: frame.ts,
+        guarded(() => {
+          pi.appendEntry("mesh-live", {
+            from: frame.from,
+            room: frame.room,
+            priority: frame.priority,
+            body: frame.body,
+            at: frame.ts,
+          });
         });
       }
     }
@@ -204,6 +225,7 @@ export function attachClientListeners(
     for (const f of frames) deliver(f);
   };
   client.on("inbound", (frame: MeshFrame) => {
+    if (detached) return; // old session's client after reload/switch — D41
     if (rt === null) return; // session shutting down
     if (rt.rateLimitedUntil !== undefined && rt.rateLimitedUntil > Date.now()) {
       heldFrames.push(frame); // no injection while the provider rejects turns
@@ -215,23 +237,26 @@ export function attachClientListeners(
 
   // presence → appendEntry ONLY, no turn
   client.on("presence", (frame: MeshFrame) => {
-    pi.appendEntry("mesh", {
-      kind: "mesh-presence",
-      alias: frame.from,
-      status: frame.status,
-      room: frame.room,
-      ts: frame.ts,
+    if (detached) return; // D41: stale ctx after reload/switch — never throw
+    guarded(() => {
+      pi.appendEntry("mesh", {
+        kind: "mesh-presence",
+        alias: frame.from,
+        status: frame.status,
+        room: frame.room,
+        ts: frame.ts,
+      });
     });
     getHud()?.scheduleStatusRefresh(); // debounced ≤1/s trailing (hello floods)
   });
 
   client.on("ready", (welcome: WelcomeInfo) => {
+    if (detached) return; // D41
+    guarded(() => updateSessionName(pi, rt));
     getHud()?.setConnecting(false);
     getHud()?.fetchStatus(); // fire-and-forget, never blocks session_start
-  // session name for /resume (alias + rooms).
-    updateSessionName(pi, rt);
   // persist identity as soon as we are connected (covers the very
-  // first connect AND every reconnect/rename/reset).
+  // first connect AND every reconnect/rename/reset). Disk-only — safe.
     saveIdentity(rt);
   // identity: tell the agent who it is, once per connection, so it
   // never has to guess its alias (the old file-based mesh had agents
@@ -302,26 +327,37 @@ export function attachClientListeners(
     if (rt.pendingHistory !== undefined && rt.pendingHistory.length > 0) {
       context += `\n\n[mesh] transferred history from the previous session:\n${rt.pendingHistory.join("\n")}`;
     }
-    pi.sendMessage(
-      {
-        customType: "mesh-context",
-        content: context,
-        display: false,
-      },
-      { triggerTurn: false },
-    );
+    guarded(() => {
+      pi.sendMessage(
+        {
+          customType: "mesh-context",
+          content: context,
+          display: false,
+        },
+        { triggerTurn: false },
+      );
+    });
   });
   client.on("renamed", () => {
-    updateSessionName(pi, rt);
-    saveIdentity(rt);
+    guarded(() => updateSessionName(pi, rt));
+    saveIdentity(rt); // disk-only
   });
   client.on("alias_fallback", ({ from, to }: { from: string; to: string }) => {
   // Another live peer holds our persisted alias (e.g. crashed session) —
   // we took a random one; persist it so the next reload does not fight
   // for the same alias again.
-    saveIdentity(rt);
-    ctx.ui.notify(`mesh: alias @${from} taken — now connected as @${to}`, { level: "warning" });
+    saveIdentity(rt); // disk-only
+    guarded(() => {
+      ctx.ui.notify(`mesh: alias @${from} taken — now connected as @${to}`, { level: "warning" });
+    });
   });
   client.on("closed", () => getHud()?.onClosed());
   client.on("expired", ({ msgId }: { msgId: string }) => getHud()?.noteExpired(msgId));
+
+  // D41: flip the guard — called from session_shutdown before client.close().
+  // Frames still in flight on the old socket are then dropped silently
+  // instead of reaching the stale pi/ctx.
+  rt.markDetached = () => {
+    detached = true;
+  };
 }
