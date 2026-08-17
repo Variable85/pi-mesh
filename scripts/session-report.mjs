@@ -1,13 +1,18 @@
 #!/usr/bin/env node
 // scripts/session-report.mjs — daily mesh/session health report.
-// Automates the post-incident cs-room analysis: session-file growth,
-// degenerate tool-call bursts, rejected results, ledger anomalies
+// Automates the post-incident cs-room forensics: session-file growth,
+// degenerate tool-call bursts, rejected results, generation latency
+// (the incident's real symptom: median turn 12s → 118s), ledger anomalies
 // (blocked/expired sends, held reservations, unknown targets).
+//
+// v0.5.3: --json gains per-session latency median/p90 + assistant-turn
+// counts; the text report flags sessions whose median generation latency
+// exceeds LATENCY_WARN_S (context damage signal).
 //
 // Usage:
 //   node scripts/session-report.mjs [--sessions DIR] [--ledger FILE] [--hours 24] [--json]
 // Exit code 1 when any threshold is exceeded (cron/alert friendly).
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -24,6 +29,7 @@ const LEDGER = argOf("ledger", path.join(process.cwd(), ".mesh", "ledger.jsonl")
 
 const SPIKE_MB = 5; // session grew past this in the window → flag
 const BURST_CALLS = 50; // tool calls in ONE assistant message → burst
+const LATENCY_WARN_S = 60; // median generation latency above this → flag
 const CUTOFF = Date.now() - HOURS * 3_600_000;
 
 const problems = [];
@@ -56,14 +62,16 @@ for (const file of sessionFiles) {
   let rejected = 0;
   let maxCalls = 0;
   let tailRead = 0;
+  const latencyGaps = []; // generation latency: input(prev) → assistant
+  let prevInputTs = null;
   const CHUNK = 512 * 1024;
   const buf = Buffer.alloc(CHUNK);
-  const fd = (await import("node:fs")).openSync(file, "r");
+  const fd = openSync(file, "r");
   try {
     let pos = 0;
     let carry = "";
     for (;;) {
-      const n = (await import("node:fs")).readSync(fd, buf, 0, CHUNK, pos);
+      const n = readSync(fd, buf, 0, CHUNK, pos);
       if (n <= 0) break;
       pos += n;
       tailRead += n;
@@ -76,6 +84,17 @@ for (const file of sessionFiles) {
         try {
           const e = JSON.parse(line);
           const m = e.message ?? {};
+          const role = m.role;
+          const ts = e.timestamp;
+          if (role === "assistant") {
+            if (prevInputTs && ts) {
+              const d = (Date.parse(ts) - Date.parse(prevInputTs)) / 1000;
+              if (d >= 0 && d < 3600) latencyGaps.push(d);
+            }
+            prevInputTs = null;
+          } else if (role === "user" || role === "toolResult") {
+            prevInputTs = ts ?? prevInputTs;
+          }
           const c = m.content;
           if (!Array.isArray(c)) continue;
           let calls = 0;
@@ -91,13 +110,32 @@ for (const file of sessionFiles) {
       }
     }
   } finally {
-    (await import("node:fs")).closeSync(fd);
+    closeSync(fd);
   }
   const mb = st.size / 1_048_576;
-  sessionRows.push({ name, mb: +mb.toFixed(1), maxCalls, bursts, rejected });
+  latencyGaps.sort((a, b) => a - b);
+  const nLat = latencyGaps.length;
+  const recent = latencyGaps.slice(-20); // the LAST 20 measured turns — the
+  // session's CURRENT state (a full-session median masks the post-incident
+  // degradation: measured 12s median overall vs 119s on the last turns).
+  const latency = nLat > 0
+    ? {
+        n: nLat,
+        median: +latencyGaps[Math.floor(nLat / 2)].toFixed(1),
+        p90: +latencyGaps[Math.floor(nLat * 0.9)].toFixed(1),
+        recentMedian: +recent[Math.floor(recent.length / 2)].toFixed(1),
+      }
+    : null;
+  sessionRows.push({ name, mb: +mb.toFixed(1), maxCalls, bursts, rejected, latency });
   if (bursts > 0) problems.push(`${name}: ${bursts} burst message(s), max ${maxCalls} calls in one message`);
   if (mb > SPIKE_MB) problems.push(`${name}: session file ${mb.toFixed(1)} MB (> ${SPIKE_MB} MB) — /compact check`);
   if (rejected > 100) problems.push(`${name}: ${rejected} rejected tool results`);
+  if (latency !== null && latency.n >= 10 && latency.median > LATENCY_WARN_S) {
+    problems.push(`${name}: median generation latency ${latency.median}s over ${latency.n} turns (> ${LATENCY_WARN_S}s — context damage? /compact)`);
+  }
+  if (latency !== null && latency.n >= 20 && latency.recentMedian > 2 * LATENCY_WARN_S) {
+    problems.push(`${name}: RECENT turns at ${latency.recentMedian}s median (session median ${latency.median}s) — degraded NOW, /compact recommended`);
+  }
 }
 
 // ---- ledger ----
@@ -158,8 +196,9 @@ if (AS_JSON) {
   console.log("sessions:");
   if (sessionRows.length === 0) console.log("  (none modified in the window)");
   for (const s of sessionRows.slice(0, 20)) {
+    const lat = s.latency !== null ? `  lat ${s.latency.median}s med / ${s.latency.p90}s p90, last ${s.latency.recentMedian}s  (n=${s.latency.n})` : "";
     console.log(
-      `  ${s.mb.toFixed(1).padStart(6)} MB  max ${String(s.maxCalls).padStart(4)} calls/msg  ${s.bursts} bursts  ${s.rejected} rejected  ${s.name}`,
+      `  ${s.mb.toFixed(1).padStart(6)} MB  max ${String(s.maxCalls).padStart(4)} calls/msg  ${s.bursts} bursts  ${s.rejected} rejected${lat}  ${s.name}`,
     );
   }
   console.log("");

@@ -194,8 +194,10 @@ v0.5 highlights:
   peers; long runs re-reserve to renew or use `autoReleaseMs`.
   Opt out: `"reservationTtlMs": 0`.
 - **`/mesh stale`** — reservations held by peers, with age and TTL state.
-- **`npm run report`** — session/ledger health report (bursts, rejected
-  results, blocked sends, leaked reservations); exit 1 on findings.
+- **`npm run report`** — session/ledger health report: bursts, rejected
+  results, blocked sends, leaked reservations, **per-session generation
+  latency (median/p90 + last-20-turns median — the "degraded NOW" signal
+  a full-session median masks)**; exit 1 on findings. v0.5.3.
 
 `.mesh/policy.json` (declarative governance, evaluated at send time):
 
