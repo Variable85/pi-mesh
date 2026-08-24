@@ -21,7 +21,8 @@ export type LedgerEventName =
   | "error"
   | "inbound"
   | "reserved"
-  | "released";
+  | "released"
+  | "dropped_offline";
 
 export interface LedgerRecord {
   schema: typeof LEDGER_SCHEMA;

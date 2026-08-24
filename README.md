@@ -34,7 +34,11 @@ local broker (NDJSON frames over a unix socket or named pipe, protocol
 - **Honest statuses** — `delivered` = written on the recipient socket (or its
   mailbox), `read` = injected into the recipient session, `answered` = an
   explicit `mesh_reply` arrived. `expired` explicitly says late replies are
-  still delivered. Never a completion.
+  still delivered. Never a completion. When a queued message later leaves
+  the mailbox without being delivered (TTL expiry or cap eviction), the
+  sender receives an async `ack(dropped_offline)` carrying the original
+  msg id — a live `awaitReply` mission settles immediately instead of
+  burning its whole timeout, and the session gets an inline re-send hint.
 - **Rooms & roles** — presence per room, `member` / `observer` roles,
   declarative policy (allow/deny lists, `force` authorization, rate limits).
 - **Offline mailbox** — per-alias queue (cap 100, TTL 1 h) flushed at the next

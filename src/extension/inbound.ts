@@ -3,6 +3,7 @@
 // remind frames re-inject as reminder text. presence frames NEVER inject a turn
 // (they are handled via pi.appendEntry in index.ts).
 import type { MeshFrame, MeshPriority } from "../protocol/envelope.js";
+import { INJECTION_RETRY_MS } from "../shared/config.js";
 import type {
   DeliverAs,
   ExtensionAPI,
@@ -283,6 +284,8 @@ export interface InboundDeps {
   isReplyToReply?: (replyTo: string) => boolean;
   /** format options (verbosity/hints) threaded to injectInbound. */
   format?: FormatOpts;
+  /** injection retry delay (defaults to INJECTION_RETRY_MS; tests shrink it). */
+  retryMs?: number;
 }
 
 /**
@@ -310,7 +313,22 @@ export function handleInboundFrame(
       replyChain: (frame as unknown as { __replyChain?: boolean }).__replyChain === true,
     });
   } catch {
-    deps.counters.injectionFailures += 1; // one bad frame must not kill the loop 
+  // one bounded retry: a transient host state (turn teardown, reload
+  // boundary) must not silently eat a frame the broker already acked
+  // delivered. If the retry throws too, the failure is counted — one bad
+  // frame must not kill the loop.
+    const delay = deps.retryMs ?? INJECTION_RETRY_MS;
+    const t = setTimeout(() => {
+      try {
+        injectInbound(pi, ctx, frame, {
+          ...(deps.format ?? {}),
+          replyChain: (frame as unknown as { __replyChain?: boolean }).__replyChain === true,
+        });
+      } catch {
+        deps.counters.injectionFailures += 1;
+      }
+    }, delay);
+    t.unref();
   }
   // the message reached the session → honest read receipt back to the
   // sender (msg/mailbox only — replies and reminds are not 'new' messages).

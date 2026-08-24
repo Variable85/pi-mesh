@@ -354,6 +354,39 @@ export function attachClientListeners(
   client.on("closed", () => getHud()?.onClosed());
   client.on("expired", ({ msgId }: { msgId: string }) => getHud()?.noteExpired(msgId));
 
+  // async drop receipt: the broker dropped one of OUR messages from the
+  // recipient's offline mailbox (TTL expiry or cap eviction). The client
+  // already settled any live awaitReply mission; the session must LEARN
+  // the message will never arrive so a re-send decision is possible.
+  client.on("dropped_offline", (frame: MeshFrame) => {
+    if (detached) return; // D41: stale ctx after reload/switch — never throw
+    const target = frame.to ?? "?";
+    guarded(() => {
+      pi.sendMessage(
+        {
+          customType: "mesh-inbound",
+          content:
+            `[mesh] drop notice: message ${frame.id} to @${target} was dropped from the ` +
+            `offline mailbox (TTL expiry or cap). It will never be delivered — ` +
+            `re-send with mesh_send if still relevant.`,
+          display: true,
+          details: { kind: "mesh-drop-notice", msgId: frame.id, to: target },
+        },
+        { triggerTurn: true, deliverAs: "followUp" },
+      );
+    });
+    try {
+      rt.ledger.append({
+        event: "dropped_offline",
+        id: frame.id,
+        to: target,
+        room: frame.room,
+      });
+    } catch {
+      // best effort — the inline notice already went out
+    }
+  });
+
   // D41: flip the guard — called from session_shutdown before client.close().
   // Frames still in flight on the old socket are then dropped silently
   // instead of reaching the stale pi/ctx.

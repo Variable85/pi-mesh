@@ -3,7 +3,7 @@
 // carrying the exact msgId so the receiving model knows HOW to answer.
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { formatInboundContent, localTime } from "../src/extension/inbound.js";
+import { formatInboundContent, handleInboundFrame, localTime } from "../src/extension/inbound.js";
 import { buildFrame, type MeshFrame } from "../src/protocol/envelope.js";
 
 const msgFrame = (): MeshFrame =>
@@ -177,5 +177,74 @@ describe("reply-to-reply info-only format (D39)", () => {
     const normal = formatInboundContent(mission, { replyChain: false, showReplyHint: true });
     assert.ok(normal.includes("answer with the mesh_reply tool"), normal);
     assert.ok(!normal.includes("INFO ONLY"), normal);
+  });
+});
+
+describe("handleInboundFrame: injection retry (a silent drop is the worst outcome)", () => {
+  const frame = (): MeshFrame =>
+    buildFrame({ type: "msg", from: "alice", to: "bob", room: "default", body: "hello" });
+
+  const makeDeps = () => {
+    const counters = { ledgerFailures: 0, transcriptFailures: 0, injectionFailures: 0 };
+    return {
+      deps: {
+        ledger: { append: (_input: unknown) => {} },
+        transcript: { record: (_dir: "in" | "out", _f: MeshFrame) => {} },
+        selfAlias: "bob",
+        counters,
+        retryMs: 5,
+      },
+      counters,
+    };
+  };
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+  it("a transient sendMessage throw retries once and recovers (no failure counted)", async () => {
+    let calls = 0;
+    const pi = {
+      sendMessage: (): void => {
+        calls += 1;
+        if (calls === 1) throw new Error("transient host state");
+      },
+    };
+    const { deps, counters } = makeDeps();
+    handleInboundFrame(pi as never, null, frame(), deps as never);
+    assert.equal(calls, 1); // first attempt threw synchronously
+    await sleep(30); // retryMs 5 — the retry has fired
+    assert.equal(calls, 2);
+    assert.equal(counters.injectionFailures, 0);
+  });
+
+  it("a persistent failure is counted exactly once, after the retry", async () => {
+    let calls = 0;
+    const pi = {
+      sendMessage: (): void => {
+        calls += 1;
+        throw new Error("host is gone");
+      },
+    };
+    const { deps, counters } = makeDeps();
+    handleInboundFrame(pi as never, null, frame(), deps as never);
+    await sleep(30);
+    assert.equal(calls, 2);
+    assert.equal(counters.injectionFailures, 1);
+  });
+
+  it("side effects (ledger/transcript/read receipt) still run on the injection-failure path", async () => {
+    const pi = { sendMessage: (): void => {
+      throw new Error("nope");
+    } };
+    const ledgerEvents: string[] = [];
+    const { counters } = makeDeps();
+    const deps = {
+      ledger: { append: (input: { event?: string }) => { ledgerEvents.push(input.event ?? "?"); } },
+      transcript: { record: (_dir: "in" | "out", _f: MeshFrame) => {} },
+      selfAlias: "bob",
+      counters,
+      retryMs: 5,
+    };
+    handleInboundFrame(pi as never, null, frame(), deps as never);
+    await sleep(30);
+    assert.ok(ledgerEvents.includes("inbound"));
   });
 });

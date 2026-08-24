@@ -71,8 +71,11 @@ describe("mailbox: offline queue", () => {
     for (let i = 0; i < 5; i += 1) {
       alice.send({ type: "msg", from: "alice", to: "bob", body: `m${i}` });
     }
-    const acks = await alice.waitFrames((f) => f.type === "ack", 5);
-    assert.ok(acks.every((a) => a.status === "queued_offline")); // still acked (E6)
+    const acks = await alice.waitFrames((f) => f.type === "ack", 7); // 5 queued + 2 drop notices
+    const queued = acks.filter((a) => a.status === "queued_offline");
+    const notices = acks.filter((a) => a.status === "dropped_offline");
+    assert.equal(queued.length, 5); // still acked (E6)
+    assert.equal(notices.length, 2); // evicted senders are TOLD (honest drops)
     assert.equal(broker.state.stats.mailboxDropped, 2); // drop-oldest counter
 
     const bob2 = await RawClient.connect(sock);
@@ -145,5 +148,94 @@ describe("mailbox: offline queue", () => {
     // mailbox guarantees is per-sender FIFO + no loss.
     assert.deepEqual([...bodies].sort(), ["a1", "a2", "c1"]);
     assert.ok(bodies.indexOf("a1") < bodies.indexOf("a2"), "per-sender order preserved");
+  });
+});
+
+describe("mailbox: honest drop notices (sender learns a queued message was dropped)", () => {
+  it("TTL expiry → the online sender receives ack(dropped_offline) carrying the original msg id", async (t) => {
+    const { broker, sock } = await setup(t, { config: { mailboxTtlMs: 200 } });
+    const alice = await RawClient.connect(sock);
+    t.after(() => alice.close());
+    alice.hello("alice");
+    await alice.waitFrame((f) => f.type === "welcome");
+
+    const bob1 = await RawClient.connect(sock);
+    bob1.hello("bob");
+    await bob1.waitFrame((f) => f.type === "welcome");
+    bob1.close();
+    await sleep(150); // broker observes the close → bob is a known offline alias
+
+    alice.send({ type: "msg", from: "alice", to: "bob", body: "gone-later", id: "m_dropnotice1" });
+    const ack = await alice.waitFrame((f) => f.type === "ack");
+    assert.equal(ack.status, "queued_offline");
+
+    await sleep(300); // past the 200 ms TTL
+    broker.purgeMailboxExpired(); // deterministic purge (independent of the 60 s interval)
+
+    const notice = await alice.waitFrame(
+      (f) => f.type === "ack" && f.status === "dropped_offline",
+    );
+    assert.equal(notice.id, "m_dropnotice1"); // correlates the ORIGINAL message
+    assert.equal(notice.to, "bob"); // the mailbox it was bound for
+    assert.equal(broker.state.stats.mailboxDropped, 1);
+  });
+
+  it("cap eviction → the evicted entry produces an immediate drop notice", async (t) => {
+    const { broker, sock } = await setup(t, { config: { mailboxCap: 1 } });
+    const alice = await RawClient.connect(sock);
+    t.after(() => alice.close());
+    alice.hello("alice");
+    await alice.waitFrame((f) => f.type === "welcome");
+    const bob1 = await RawClient.connect(sock);
+    bob1.hello("bob");
+    await bob1.waitFrame((f) => f.type === "welcome");
+    bob1.close();
+    await sleep(150);
+
+    alice.send({ type: "msg", from: "alice", to: "bob", body: "first", id: "m_dropnotice2a" });
+    await alice.waitFrame((f) => f.type === "ack");
+    alice.send({ type: "msg", from: "alice", to: "bob", body: "second", id: "m_dropnotice2b" });
+    await alice.waitFrame((f) => f.type === "ack" && f.status === "queued_offline");
+
+    const notice = await alice.waitFrame(
+      (f) => f.type === "ack" && f.status === "dropped_offline",
+    );
+    assert.equal(notice.id, "m_dropnotice2a"); // the OLDEST was evicted
+    assert.equal(broker.state.stats.mailboxDropped, 1);
+
+    // bob returns: only the survivor is delivered
+    const bob2 = await RawClient.connect(sock);
+    t.after(() => bob2.close());
+    bob2.hello("bob");
+    const welcome = await bob2.waitFrame((f) => f.type === "welcome");
+    assert.equal(welcome.mailboxCount, 1);
+  });
+
+  it("expired-at-flush: entries that aged out while the owner was away also notify the sender", async (t) => {
+    const { broker, sock } = await setup(t, { config: { mailboxTtlMs: 200 } });
+    const alice = await RawClient.connect(sock);
+    t.after(() => alice.close());
+    alice.hello("alice");
+    await alice.waitFrame((f) => f.type === "welcome");
+    const bob1 = await RawClient.connect(sock);
+    bob1.hello("bob");
+    await bob1.waitFrame((f) => f.type === "welcome");
+    bob1.close();
+    await sleep(150);
+
+    alice.send({ type: "msg", from: "alice", to: "bob", body: "aged-out", id: "m_dropnotice3" });
+    await alice.waitFrame((f) => f.type === "ack");
+    await sleep(300); // TTL passes while bob is still away
+
+    const bob2 = await RawClient.connect(sock);
+    t.after(() => bob2.close());
+    bob2.hello("bob");
+    const welcome = await bob2.waitFrame((f) => f.type === "welcome");
+    assert.equal(welcome.mailboxCount, 0); // nothing left to deliver
+
+    const notice = await alice.waitFrame(
+      (f) => f.type === "ack" && f.status === "dropped_offline",
+    );
+    assert.equal(notice.id, "m_dropnotice3");
   });
 });

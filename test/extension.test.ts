@@ -74,7 +74,7 @@ describe("extension inbound handler (T-B1)", () => {
     assert.equal(c.ledgerFailures, 0);
   });
 
-  it("an injection failure is caught + counted — one bad frame cannot kill the loop", () => {
+  it("an injection failure is caught + counted — one bad frame cannot kill the loop", async () => {
     const c = counters();
     let ledgerAppends = 0;
     const throwingPi = {
@@ -92,7 +92,11 @@ describe("extension inbound handler (T-B1)", () => {
       transcript: { record: () => {} },
       selfAlias: "alice",
       counters: c,
+      retryMs: 1,
     });
+  // the count now lands AFTER the one bounded retry — a silent drop is
+  // the worst outcome once the broker already acked delivered
+    await new Promise((r) => setTimeout(r, 20));
     assert.equal(c.injectionFailures, 1);
     assert.equal(ledgerAppends, 1, "ledger still records the frame");
     // the handler is still usable for the NEXT frame

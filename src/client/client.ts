@@ -881,6 +881,21 @@ export class MeshClient extends EventEmitter {
           this.ackWaiters.delete(frame.id);
           clearTimeout(w.timer);
           w.resolve(frame);
+          break;
+        }
+  // async drop notice: the broker dropped a message we sent earlier
+  // from the recipient's offline mailbox (TTL expiry or cap eviction).
+  // No send is waiting for this ack — settle any live awaitReply mission
+  // NOW (it can never be answered from a dropped message) and tell the
+  // extension so the session learns the message will not arrive.
+        if (frame.status === "dropped_offline") {
+          if (this.pending.has(frame.id)) this.pending.cancel(frame.id, "dropped_offline");
+          const m = this.awaitedMissions.get(frame.id);
+          if (m !== undefined) {
+            m.status = "failed";
+            m.response = "dropped_offline";
+          }
+          this.emit("dropped_offline", frame);
         }
         break;
       }
