@@ -493,6 +493,18 @@ export function validateFrame(value: unknown, opts: ValidateOpts = {}): Validati
     }
   }
 
+  // ack statuses — closed set when present. "dropped_offline" also rides
+  // ASYNCHRONOUS drop notices from the mailbox (TTL expiry / cap eviction):
+  // an unsolicited ack with no pending send is legal by design.
+  if (value.type === "ack" && value.status !== undefined) {
+    if (
+      typeof value.status !== "string" ||
+      !(ACK_STATUSES as readonly string[]).includes(value.status)
+    ) {
+      return { ok: false, code: "invalid_frame", detail: "bad ack status" };
+    }
+  }
+
   // error frames: closed code set
   if (value.type === "error") {
     if (

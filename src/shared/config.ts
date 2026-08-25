@@ -62,6 +62,10 @@ export const LOCK_RETRY_MAX = 3;
 
 // ---- Inbound batching ----
 export const DEFAULT_INBOUND_BATCH_MS = 250;
+/** One bounded retry when session injection throws (transient host state
+ *  such as a turn teardown) before the failure is counted — the broker
+ *  already acked `delivered`, so a silent drop is the worst outcome. */
+export const INJECTION_RETRY_MS = 250;
 
 // ---- Activity status ----
 export const DEFAULT_ACTIVITY_IDLE_MS = 120_000; // 2 min without heartbeat/tools

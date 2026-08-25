@@ -286,3 +286,28 @@ describe("envelope: forbidden persisted keys (ledger safety, E25 primitive)", ()
     assert.equal(hasForbiddenPersistedKey([1, 2, { ok: true }]), false);
   });
 });
+
+describe("envelope: ack status closed set", () => {
+  it("every ACK_STATUSES value validates on an ack frame", () => {
+    for (const status of ["delivered", "queued_offline", "dropped_offline", "ok"]) {
+      const res = validateFrame(buildFrame({ type: "ack", id: "m_x", status }));
+      assert.equal(res.ok, true, status);
+    }
+  });
+
+  it("a statusless ack stays valid (status optional)", () => {
+    const res = validateFrame(buildFrame({ type: "ack", id: "m_x" }));
+    assert.equal(res.ok, true);
+  });
+
+  it("unknown ack status is rejected", () => {
+    const res = validateFrame(buildFrame({ type: "ack", id: "m_x", status: "probably" }));
+    assert.equal(res.ok, false);
+    if (!res.ok) assert.equal(res.code, "invalid_frame");
+  });
+
+  it("status on a NON-ack frame is not constrained by the ack set", () => {
+    const res = validateFrame(buildFrame({ type: "activity", from: "alice", status: "busy" }));
+    assert.equal(res.ok, true);
+  });
+});

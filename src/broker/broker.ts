@@ -37,7 +37,7 @@ import {
   peersSnapshot,
   presenceFrame,
 } from "./rooms.js";
-import { BrokerState, type PeerRecord } from "./state.js";
+import { BrokerState, type PeerRecord, type StoredMsg } from "./state.js";
 
 export interface BrokerOptions {
   config: MeshConfig;
@@ -56,6 +56,10 @@ export interface RunningBroker {
   state: BrokerState;
   socketPath: string;
   close: () => Promise<void>;
+  /** Run one mailbox TTL purge NOW and send drop notices (the interval
+   *  does the same every MAILBOX_PURGE_INTERVAL_MS; this hook makes the
+   *  behavior testable/deterministic). */
+  purgeMailboxExpired: (now?: number) => void;
 }
 
 type WriteCallback = (ok: boolean) => void;
@@ -139,6 +143,24 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
     totalCount?: number,
   ): void => {
     sendTo(peer, buildFrame({ type: "ack", id, status, interruptStatus, deliveredCount, totalCount }));
+  };
+
+  /** Honest drop receipts: tell each ORIGINAL sender (when online) that
+   *  their message left the recipient's offline mailbox — TTL expiry or
+   *  cap eviction. The ack id carries the original msg id so the client
+   *  can correlate and settle any live awaitReply mission immediately;
+   *  `to` names the mailbox the message was bound for. Offline senders
+   *  get nothing here (a notice would itself need a mailbox) — the
+   *  status_res counter still records every drop. */
+  const notifyDropped = (dropped: StoredMsg[]): void => {
+    for (const { frame } of dropped) {
+      const sender = frame.from !== undefined ? state.peers.get(frame.from) : undefined;
+      if (sender === undefined || !sender.helloDone || sender.socket.destroyed) continue;
+      sendTo(
+        sender,
+        buildFrame({ type: "ack", id: frame.id, status: "dropped_offline", to: frame.to }),
+      );
+    }
   };
 
   /** replyAll — fan the answer out to every ONLINE room member (except the
@@ -284,7 +306,8 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
       }
     }
 
-    const mailboxFrames = flushMailbox(state, config, alias);
+    const { frames: mailboxFrames, dropped: mailboxDropped } = flushMailbox(state, config, alias);
+    if (mailboxDropped.length > 0) notifyDropped(mailboxDropped);
     sendTo(
       peer,
       buildFrame({
@@ -354,7 +377,7 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
                 } else {
   // identity guard — a re-hello may have replaced the record.
                   if (state.peers.get(target.alias) === target) closePeer(state, target.alias, "write_failure");
-                  enqueueMailbox(state, config, target.alias, frame);
+                  notifyDropped(enqueueMailbox(state, config, target.alias, frame));
                   queued += 1;
                   resolve(false);
                 }
@@ -362,7 +385,7 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
             }),
           );
         } else if (state.knownAliases.has(alias)) {
-          enqueueMailbox(state, config, alias, frame);
+          notifyDropped(enqueueMailbox(state, config, alias, frame));
           queued += 1;
         }
       }
@@ -439,13 +462,13 @@ export function createBroker(options: BrokerOptions): Promise<RunningBroker> {
         } else {
   // identity guard — a re-hello may have replaced the record.
           if (state.peers.get(t.alias) === t) closePeer(state, t.alias, "write_failure");
-          enqueueMailbox(state, config, t.alias, routedFrame);
+          notifyDropped(enqueueMailbox(state, config, t.alias, routedFrame));
           sendAck(from, frame.id, "queued_offline", interruptStatus);
         }
       });
     } else {
   // known offline alias → mailbox, THEN ack(queued_offline)
-      enqueueMailbox(state, config, to, routedFrame);
+      notifyDropped(enqueueMailbox(state, config, to, routedFrame));
       state.stats.relayed += 1;
       sendAck(from, frame.id, "queued_offline", interruptStatus);
     }
@@ -731,8 +754,14 @@ const onTcpConn = (socket: Socket): void => serverHandler(socket, true);
   }, SWEEP_INTERVAL_MS);
   sweep.unref();
 
-  const mailboxPurge = setInterval(() => purgeAllExpired(state, config), MAILBOX_PURGE_INTERVAL_MS);
+  const mailboxPurge = setInterval(
+    () => notifyDropped(purgeAllExpired(state, config)),
+    MAILBOX_PURGE_INTERVAL_MS,
+  );
   mailboxPurge.unref();
+  const purgeMailboxExpired = (now?: number): void => {
+    notifyDropped(purgeAllExpired(state, config, now));
+  };
 
   const listening: Server[] = unixServer !== undefined ? [server, unixServer] : [server];
   return new Promise((resolve, reject) => {
@@ -758,6 +787,7 @@ const onTcpConn = (socket: Socket): void => serverHandler(socket, true);
         server,
         state,
         socketPath: unixServer !== undefined ? `${bound} + unix://${sockPath}` : bound,
+        purgeMailboxExpired,
         close: () =>
           new Promise<void>((res) => {
             clearInterval(sweep);
