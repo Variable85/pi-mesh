@@ -198,20 +198,24 @@ export function luminance(rgb: { r: number; g: number; b: number }): number {
   return (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
 }
 
-/** One verdict line: text in the agent's fg color, FULL-WIDTH background in
- *  the agent's color (padded to `width`). */
-function verdictLine(
+/** One verdict entry: text wrapped to `width`, EVERY line tinted in the
+ *  agent's fg color with FULL-WIDTH background (padded to `width`).
+ *  Wrapping (not hard truncation) is mandatory: CJK chars are double-width,
+ *  so a char-count cap alone can produce lines wider than the terminal —
+ *  which crashes pi's renderer (uncaughtException in doRender). */
+function verdictLines(
   marker: string,
   to: string,
   text: string,
   width: number,
   theme: RenderTheme,
-): string {
+): string[] {
   const color = agentColor(to);
-  const body = `${marker} @${to}: ${text}`;
+  const full = `${marker} @${to}: ${text}`;
+  const parts = wrapTextWithAnsi(full, Math.max(1, width));
   const bg = ansiBackground(color, theme);
   // without a theme the agent color is used for the text (plain background)
-  if (bg === undefined) return theme.fg(color, body);
+  if (bg === undefined) return parts.map((part) => theme.fg(color, part));
   // adaptive contrast: dark text on LIGHT agent backgrounds, light text on
   // DARK ones — always readable
   const rgb = ansiToRgb(bg);
@@ -219,8 +223,10 @@ function verdictLine(
     rgb !== undefined && luminance(rgb) > 0.5
       ? "\x1b[38;5;232m" // near-black
       : "\x1b[38;5;255m"; // near-white
-  const vis = visibleWidth(body);
-  return `${bg}${fgCode}${body}${" ".repeat(Math.max(0, width - vis))}\x1b[39m\x1b[49m`;
+  return parts.map((part) => {
+    const vis = visibleWidth(part);
+    return `${bg}${fgCode}${part}${" ".repeat(Math.max(0, width - vis))}\x1b[39m\x1b[49m`;
+  });
 }
 
 /** The wait_all verdict rendered as a colored entry: header in accent on the
@@ -249,10 +255,10 @@ export function renderVerdictEntry(
   // room between the colored blocks)
   const entries: string[] = [];
   for (const a of data?.answers ?? []) {
-    entries.push(verdictLine("✓", a.to, a.response.replace(/\s+/g, " ").trim().slice(0, 120), width, theme));
+    entries.push(...verdictLines("✓", a.to, a.response.replace(/\s+/g, " ").trim().slice(0, 240), width, theme));
   }
   for (const m of data?.missing ?? []) {
-    entries.push(verdictLine("✗", m.to, `NOT ANSWERED (${m.msgId.slice(0, 18)})`, width, theme));
+    entries.push(...verdictLines("✗", m.to, `NOT ANSWERED (${m.msgId.slice(0, 18)})`, width, theme));
   }
   for (let i = 0; i < entries.length; i += 1) {
     if (i > 0 && bg !== undefined) {
