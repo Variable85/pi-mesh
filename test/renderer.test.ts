@@ -1,6 +1,7 @@
 // test/renderer.test.ts — D41: colored rendering (aliases in accent, batch header).
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { visibleWidth } from "@mariozechner/pi-tui";
 import { colorizeAliases, renderLiveEntry, renderMeshInbound, renderVerdictEntry } from "../src/extension/renderer.js";
 
 import { agentColor } from "../src/extension/colors.js";
@@ -167,5 +168,62 @@ describe("verdict entry (mesh-verdict, agent-colored backgrounds)", () => {
     );
     assert.ok(lines.some((l) => l.includes("@agent-2")));
     assert.ok(!lines.some((l) => l.includes("\x1b[48")), "no background without fgAnsi");
+  });
+});
+
+describe("verdict width safety — every line fits the terminal (issue #1)", () => {
+  // REAL ANSI codes (invisible to visibleWidth) — fake <tag> markers would
+  // pollute the width measurement itself.
+  const ansiTheme = {
+    fg: (_c: string, t: string) => t,
+    bg: (_c: string, t: string) => t,
+    fgAnsi: (c: string) => `\x1b[38;5;${(c.length % 200) + 17}m`,
+  };
+  const plainAnsiTheme = { fg: (_c: string, t: string) => `\x1b[35m${t}\x1b[39m` };
+
+  // pi-tui's renderer THROWS on any line wider than the terminal — CJK
+  // graphemes are 2 columns each, so a char-count cap cannot bound the
+  // rendered width. The crash input from the issue: ~80 CJK chars.
+  const cases: { name: string; response: string; width: number; theme: unknown }[] = [
+    { name: "the exact crash input (80 CJK chars on a 126-col terminal)", response: "测".repeat(80), width: 126, theme: ansiTheme },
+    { name: "all-CJK worst case at 80 cols", response: "漢".repeat(200), width: 80, theme: ansiTheme },
+    { name: "narrow terminal (40 cols), CJK answer", response: "日本語の回答です。".repeat(10), width: 40, theme: ansiTheme },
+    { name: "very narrow terminal (12 cols)", response: "宽字符文本".repeat(20), width: 12, theme: ansiTheme },
+    { name: "plain theme (no background) also fits", response: "测".repeat(80), width: 126, theme: plainAnsiTheme },
+    { name: "emoji + CJK mix", response: "🎉任务完成✓ 已验证 ".repeat(20), width: 100, theme: ansiTheme },
+  ];
+
+  for (const c of cases) {
+    it(`${c.name}: visibleWidth(line) <= ${c.width} for every rendered line`, () => {
+      const lines = renderVerdictEntry(
+        {
+          head: "wait_all",
+          answers: [{ to: "agent-3", response: c.response }],
+          missing: [{ to: "a-very-long-alias-name-here-0123456789", msgId: "m_xxx" }],
+        },
+        c.width,
+        c.theme as never,
+      );
+      assert.ok(lines.length > 0);
+      for (const l of lines) {
+        assert.ok(
+          visibleWidth(l) <= c.width,
+          `line exceeds terminal: ${visibleWidth(l)} > ${c.width}: ${JSON.stringify(l.slice(0, 60))}`,
+        );
+      }
+    });
+  }
+
+  it("a CJK answer now WRAPS instead of overflowing (multi-line block, all parts colored)", () => {
+    const lines = renderVerdictEntry(
+      { answers: [{ to: "agent-3", response: "测".repeat(80) }] },
+      126,
+      ansiTheme as never,
+    );
+    assert.ok(lines.some((l) => l.includes("@agent-3")), "first line carries the agent name");
+    assert.ok(
+      lines.filter((l) => l.includes("\x1b[48;5;")).length >= 2,
+      "the answer spans multiple full-width colored lines",
+    );
   });
 });
