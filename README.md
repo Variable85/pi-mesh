@@ -191,6 +191,20 @@ node dist/src/cli/mesh.js doctor               # socket? lock stale? pid? protoc
   "inboundBatchMs": 250, "inboundBatchMaxHoldMs": 30000 }
 ```
 
+v0.6 highlights:
+
+- **Wake-on-answer** — every LAUNCH mission answer (`awaitReply: true,
+  block: false`) is delivered to the session the moment it lands (stored in
+  the inbox, injected with `triggerTurn` through the hardened inbound path):
+  an idle sender wakes, a busy one gets the batch, and the answer frame can
+  itself be replied to. While a `mesh_wait_all` is in flight the verdict
+  carries the batch instead — never a double delivery. Answers are now
+  MORE visible than late (orphan) replies, never less.
+- **Cancelable blocking sends** — ESC on a blocking `awaitReply` send
+  settles it immediately as an honest `cancelled` (was: hanging until the
+  30-min timeout); the mission is dropped and a late reply still arrives
+  via the orphan-inject path.
+
 v0.5 highlights:
 
 - **Context watchdog** — notifies when ONE turn grows the session file by
@@ -366,7 +380,7 @@ MESH_BROKER_URL=tcp://<machine-A>:8712 MESH_BROKER_TOKEN=change-me pi
 
 ```bash
 npm run build   # strict tsc (ESM, NodeNext)
-npm test        # build + node --test dist/test/*.test.js (286 tests)
+npm test        # build + node --test dist/test/*.test.js (392 tests)
 npm run smoke   # E2E without Pi: broker + 2 headless clients
 ```
 
