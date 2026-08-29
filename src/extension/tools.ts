@@ -98,6 +98,9 @@ function resultText(res: SendResult): string {
     case "blocked":
       return `blocked: ${res.reason}`;
     case "error":
+      if (res.reason === "cancelled") {
+        return `cancelled ${res.msgId ?? ""} (ESC — mission dropped; a late reply is still delivered and injected)`;
+      }
       return `error: ${res.reason}`;
   }
 }
@@ -206,8 +209,10 @@ const MESH_SEND_PARAMETERS: Record<string, unknown> = {
       type: "boolean",
       description: "D46: with awaitReply — false = LAUNCH mode: return the delivery " +
         "result immediately, keep the mission tracked in the background, and " +
-        "call mesh_wait_all for the group verdict. Default true (blocks until " +
-        "the reply or the timeout).",
+        "call mesh_wait_all for the group verdict. Each answer is ALSO " +
+        "delivered to the session as a [mesh] reply event (an idle session " +
+        "wakes). Default true (blocks until the reply or the timeout; ESC " +
+        "cancels a blocking wait).",
     },
     timeoutMs: {
       type: "number",
@@ -237,6 +242,7 @@ const MESH_SEND_PARAMETERS: Record<string, unknown> = {
 async function execMeshSend(
   getRuntime: GetRuntime,
   params: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<ToolResult> {
   const rt = getRuntime();
   if (rt === null) return textResult("blocked: session_not_started", sendDetails({ status: "blocked", reason: "session_not_started" }));
@@ -343,6 +349,7 @@ async function execMeshSend(
   const res = await rt.client.send({
     to: broadcast ? undefined : to,
     message, room, priority, reason, awaitReply, block, timeoutMs, refs, broadcast, replyTo,
+    signal: !launch && signal !== undefined ? signal : undefined,
   });
 
   // `delivered` is ledgered ONLY here — after the broker ack (client.send
@@ -391,7 +398,7 @@ async function execMeshSend(
   // launch-mode hint so the agent knows the verdict comes from wait_all
   const hint =
     launch && (res.status === "delivered" || res.status === "queued_offline")
-      ? ` (mission tracked — use mesh_wait_all for the group verdict)`
+      ? ` (mission tracked — answers arrive as [mesh] reply events; mesh_wait_all gives the group verdict)`
       : "";
   const warnSuffix =
     sendWarnings.length > 0 ? `\n${sendWarnings.map((w) => `  ${w}`).join("\n")}` : "";
@@ -991,13 +998,17 @@ export function registerTools(pi: ExtensionAPI, getRuntime: GetRuntime): void {
       "Use mesh_reply(msgId) to answer an inbound [mesh] message. " +
       "priority=force requires reason and aborts the recipient turn. " +
       "delivered/queued_offline are NOT completions. " +
+      "LAUNCH sends (awaitReply + block:false) return immediately — each " +
+      "answer then arrives as a [mesh] reply event that wakes the session; " +
+      "call mesh_wait_all only when you must collect the whole batch before " +
+      "continuing. " +
       "An 'expired' awaitReply is NOT a lost message: late replies are " +
       "delivered and injected automatically — do not re-send the request, " +
       "check mesh_history first. " +
       "replyTo: [aliases] designates who receives the reply instead of you " +
       "(include yourself to also get the answer, e.g. with awaitReply).",
     parameters: MESH_SEND_PARAMETERS,
-    execute: (_toolCallId, params, _signal, _onUpdate, _ctx) => execMeshSend(getRuntime, params),
+    execute: (_toolCallId, params, signal, _onUpdate, _ctx) => execMeshSend(getRuntime, params, signal),
   });
 
   pi.registerTool({

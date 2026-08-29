@@ -73,6 +73,21 @@ describe("pending: correlation & resolution", () => {
     assert.equal(r2.kind, "error");
     assert.equal(r2.reason, "done");
   });
+
+  it("launch flag: isLaunch reports live LAUNCH missions only", async () => {
+    const p = new PendingReplies(() => {});
+    const blocking = p.register("m_blk_11111111", Date.now() + 5000);
+    const launched = p.register("m_lau_11111111", Date.now() + 5000, true);
+    assert.equal(p.isLaunch("m_blk_11111111"), false, "default register is blocking");
+    assert.equal(p.isLaunch("m_lau_11111111"), true, "register(..., true) is launch");
+    assert.equal(p.isLaunch("m_unknown"), false, "unknown msgId is never launch");
+    // consuming the reply clears the flag (handleReply consumed the entry)
+    assert.equal(p.handleReply(buildFrame({ type: "reply", from: "bob", to: "alice", replyTo: "m_lau_11111111", body: "ok" })), true);
+    assert.equal(p.isLaunch("m_lau_11111111"), false);
+    assert.equal((await launched).kind, "reply");
+    p.cancel("m_blk_11111111", "done");
+    await blocking;
+  });
 });
 
 describe("pending: N3 — no instant reminds at timeout 0", () => {

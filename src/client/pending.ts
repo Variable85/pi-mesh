@@ -14,6 +14,10 @@ interface PendingEntry {
   remindCount: number;
   timers: NodeJS.Timeout[];
   resolve: (r: PendingResolution) => void;
+  /** LAUNCH mission (awaitReply + block:false): the tool result already
+   *  returned, so the ANSWER must be delivered to the session as an event
+   *  (wake-on-answer) instead of a tool resolution. */
+  launch: boolean;
 }
 
 /**
@@ -21,6 +25,8 @@ interface PendingEntry {
  * - correlation strict: replyTo === msgId (any other reply ignored + counted)
  * - reminds at T/2 and 3T/4 via onRemind hook (client sends `remind`), max 2
  * - expiry terminal at expiresAt; late reply counted, not delivered
+ * - launch flag: block:false missions resolve the SAME way, but the client
+ *   additionally delivers the answer frame to the session (wake-on-answer)
  */
 export class PendingReplies {
   private readonly entries = new Map<string, PendingEntry>();
@@ -29,12 +35,12 @@ export class PendingReplies {
 
   constructor(private readonly onRemind: (msgId: string) => void) {}
 
-  register(msgId: string, expiresAtMs: number): Promise<PendingResolution> {
+  register(msgId: string, expiresAtMs: number, launch = false): Promise<PendingResolution> {
     this.cancel(msgId, "superseded");
     const now = Date.now();
     const total = Math.max(0, expiresAtMs - now);
     return new Promise<PendingResolution>((resolve) => {
-      const entry: PendingEntry = { msgId, expiresAt: expiresAtMs, remindCount: 0, timers: [], resolve };
+      const entry: PendingEntry = { msgId, expiresAt: expiresAtMs, remindCount: 0, timers: [], resolve, launch };
       const schedule = (delay: number, fn: () => void): void => {
         const t = setTimeout(fn, delay);
         t.unref();
@@ -62,6 +68,12 @@ export class PendingReplies {
       });
       this.entries.set(msgId, entry);
     });
+  }
+
+  /** True when msgId is a live LAUNCH mission (awaitReply + block:false).
+   *  Consulted by the client BEFORE handleReply consumes the entry. */
+  isLaunch(msgId: string): boolean {
+    return this.entries.get(msgId)?.launch === true;
   }
 
   /** Route an inbound reply frame. Returns true if it resolved a pending. */
