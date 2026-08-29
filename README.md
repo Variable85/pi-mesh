@@ -51,6 +51,13 @@ local broker (NDJSON frames over a unix socket or named pipe, protocol
 - **Group orchestration** — `mesh_wait_all` + launch mode (`awaitReply: true,
   block: false`): send a mission burst, then get ONE honest group verdict
   (who answered with the answer, who is missing). No sleep, no polling.
+  Each answer is ALSO delivered to the session as a `[mesh]` reply event
+  (wake-on-answer): an idle sender wakes the moment a mission is answered,
+  and the answer frame lands in the inbox so it can itself be replied to.
+  While a `mesh_wait_all` is in flight the verdict carries the batch instead
+  (no double delivery). A blocking `mesh_send` (default) can be aborted with
+  ESC — the pending settles immediately as `cancelled` and a late reply is
+  still injected.
 - **Inbound batching** — bursts are held while the agent is busy (long tool
   call) and injected as ONE batched message; live preview entries show the
   burst in real time while it happens (zero LLM tokens).
@@ -134,7 +141,10 @@ and in the bundled skill):
 
 1. Launch the burst: `mesh_send(..., awaitReply: true, block: false)` per
    mission — each returns `delivered` immediately, the mission stays tracked
-   in the background (reminders, expiry, answer capture).
+   in the background (reminders, expiry, answer capture). Every answer
+   arrives as a `[mesh]` reply event the moment it lands (the session wakes
+   if idle; keep working in the meantime), so `mesh_wait_all` is only needed
+   when you must collect the whole batch before continuing.
 2. One `mesh_wait_all` for the group verdict — fast answers that arrived
    before the call are included; already-verdict'd missions are never
    re-listed. The verdict is ALSO rendered in the conversation as a colored

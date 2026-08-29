@@ -75,12 +75,16 @@ duplicates, loops and confusion.
 1. **Launch** every mission with `awaitReply: true, block: false` — the
    tool returns `delivered` immediately and the mission stays tracked in
    the background (reminds, expiry, answers). A burst of N missions costs
-   one turn, not N blocking calls.
+   one turn, not N blocking calls. **Each answer arrives the moment it
+   lands as a `[mesh]` reply event** (an idle session wakes; keep working
+   in the meantime) and lands in the inbox, so it can be replied to.
 2. **`mesh_wait_all { timeoutMs }`** — the turn is suspended INSIDE the
    tool call (no sleep, no polling). It returns the honest group verdict:
    who answered (with the answer), who is missing. Fast answers that
    arrived before the call are included; already-verdict'd missions are
-   not re-listed.
+   not re-listed. While it runs, answers are carried by the verdict (not
+   injected again). Reach for it only when you must collect the whole
+   batch before continuing.
 3. **ESC cancels a pending `mesh_wait_all`** — the verdict says
    `(CANCELLED — ESC)` and reports NOTHING: the missions stay reportable,
    so a later `mesh_wait_all` re-lists them. Use it to abort a long wait
@@ -90,7 +94,8 @@ duplicates, loops and confusion.
   that is what `mesh_wait_all` is for.
 - `block: false` without `awaitReply` is refused; `awaitReply` without
   `block: false` blocks the turn until that one reply (fine for a single
-  awaited send).
+  awaited send — and ESC now cancels it: the mission is dropped and a
+  late reply is still injected).
 
 ## Orchestrator rhythm (delay-free)
 

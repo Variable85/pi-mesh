@@ -78,6 +78,11 @@ export interface SendOpts {
   *  mesh_reply without an explicit `to` goes to ALL of them. Include
   *  yourself if you also want the answer (e.g. with awaitReply). */
   replyTo?: string | string[];
+  /** Abort a BLOCKING awaitReply send (ESC): cancels the pending, cleans
+   *  the mission, and returns {status:"error", reason:"cancelled"} — a
+   *  late reply still arrives via the orphan-inject path. Ignored for
+   *  LAUNCH sends (they never block). */
+  signal?: AbortSignal;
 }
 
 export interface ReplyOpts {
@@ -225,6 +230,11 @@ export class MeshClient extends EventEmitter {
   private readonly inbox = new Map<string, MeshFrame>(); // msgId → inbound msg (mesh_reply target)
   private readonly awaitTargets = new Map<string, { to: string; room: string }>();
   private readonly pending: PendingReplies;
+  /** waitAll() calls currently in flight (a counter: two concurrent
+   *  waits must not clear each other's suppression) — while > 0, matched
+   *  LAUNCH answers skip session injection (the verdict carries that
+   *  batch). */
+  private waitAllInFlight = 0;
   /** Memory-only ring buffer of last frames (bodies included) for mesh_history. */
   readonly transcript: MeshFrame[] = [];
   /** Own file reservations — declared at hello, updated via reserve/release. */
@@ -403,11 +413,13 @@ export class MeshClient extends EventEmitter {
       if (now - Date.parse(m.at) <= RECENT_ANSWER_WINDOW_MS) targets.add(id);
     }
     const targetList = [...targets];
+    this.waitAllInFlight += 1; // answers arriving now are carried by the verdict
     return new Promise((resolve) => {
       let settled = false;
       const done = (status: "complete" | "timeout" | "cancelled"): void => {
         if (settled) return;
         settled = true;
+        this.waitAllInFlight -= 1;
         if (signal !== undefined) signal.removeEventListener("abort", onAbort);
         if (status !== "cancelled") {
   // answered missions of this verdict are reported once — a
@@ -931,6 +943,8 @@ export class MeshClient extends EventEmitter {
       case "reply": {
         const replyTo = frame.replyTo;
         const body = frame.body ?? "";
+  // wake-on-answer: consult the launch flag BEFORE handleReply consumes it
+        const wake = replyTo !== undefined && this.pending.isLaunch(replyTo) && this.waitAllInFlight === 0;
         const matched = replyTo !== undefined ? this.pending.handleReply(frame) : false;
         if (matched) {
   // awaited reply — the send promise already carries the answer
@@ -944,7 +958,20 @@ export class MeshClient extends EventEmitter {
               m.at = frame.ts;
             }
           }
-          this.emit("reply", frame);
+          if (wake) {
+  // LAUNCH mission, no wait_all in flight: deliver the answer to the
+  // session like an orphan reply — stored in the inbox (so it can itself
+  // be replied to) and injected with triggerTurn, waking an idle session.
+  // While wait_all is active the verdict carries this batch instead (no
+  // double delivery).
+            if (frame.id) {
+              this.inbox.set(frame.id, frame);
+              this.pruneInbox();
+            }
+            this.emit("inbound", frame);
+          } else {
+            this.emit("reply", frame);
+          }
         } else if (replyTo !== undefined && this.isDuplicateReply(replyTo, body)) {
   // this EXACT answer (same msgId + same body) was already
   // consumed (awaitReply) or injected (orphan) — a re-send on a
@@ -1175,7 +1202,7 @@ export class MeshClient extends EventEmitter {
       this.awaitTargets.set(frame.id, { to: to ?? "*", room });
       this.awaitedMissions.set(frame.id, { to: to ?? "*", room, status: "waiting", answered: false });
       this.pruneAwaitedMissions();
-      pendingPromise = this.pending.register(frame.id, Date.now() + timeoutMs);
+      pendingPromise = this.pending.register(frame.id, Date.now() + timeoutMs, launch);
     }
 
     const ackPromise = this.waitAck(frame.id);
@@ -1260,7 +1287,25 @@ export class MeshClient extends EventEmitter {
       };
     }
 
-    const resolution = await pendingPromise;
+    // ESC on a blocking send: settle immediately instead of hanging until
+    // the mission timeout (signal → pending.cancel → resolution error).
+    let onAbort: (() => void) | undefined;
+    if (opts.signal !== undefined) {
+      if (opts.signal.aborted) {
+        this.pending.cancel(frame.id, "cancelled");
+      } else {
+        onAbort = () => this.pending.cancel(frame.id, "cancelled");
+        opts.signal.addEventListener("abort", onAbort, { once: true });
+      }
+    }
+    let resolution: import("./pending.js").PendingResolution;
+    try {
+      resolution = await pendingPromise;
+    } finally {
+      if (onAbort !== undefined && opts.signal !== undefined) {
+        opts.signal.removeEventListener("abort", onAbort);
+      }
+    }
     this.awaitTargets.delete(frame.id);
     if (resolution.kind === "reply" && resolution.frame) {
       return {
@@ -1276,6 +1321,12 @@ export class MeshClient extends EventEmitter {
       if (m !== undefined) m.status = "expired";
       this.emit("expired", { msgId: frame.id });
       return { status: "expired", msgId: frame.id, reason: "expired" };
+    }
+    // cancelled = the sender aborted: drop the mission entirely (a late
+    // reply takes the orphan path and is injected) — never "waiting".
+    if (resolution.kind === "error" && resolution.reason === "cancelled") {
+      this.awaitedMissions.delete(frame.id);
+      return { status: "error", msgId: frame.id, reason: "cancelled" };
     }
     return { status: "error", msgId: frame.id, reason: resolution.reason ?? "error" };
   }
